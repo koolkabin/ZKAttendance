@@ -7,7 +7,6 @@ import Dashboard from './pages/Dashboard'
 import Employees from './pages/Employees'
 import Departments from './pages/Departments'
 import Branches from './pages/Branches'
-import Devices from './pages/Devices'
 import Attendance from './pages/Attendance'
 import ErrorLog from './pages/ErrorLog'
 import DailyReport from './pages/DailyReport'
@@ -47,22 +46,29 @@ export default function App() {
       >
         <Route index element={<Home />} />
 
+        {/* Attendance & Approvals */}
         <Route path="attendance" element={<Manager><Attendance /></Manager>} />
-        <Route path="unregistered" element={<Manager><UnregisteredIds /></Manager>} />
-        <Route path="employees" element={<Manager><Employees /></Manager>} />
-        <Route path="departments" element={<Manager><Departments /></Manager>} />
-        <Route path="branches" element={<Manager><Branches /></Manager>} />
-        <Route path="devices" element={<Manager><Devices /></Manager>} />
-        <Route path="holidays" element={<Manager><Holidays /></Manager>} />
         <Route path="attendance/approvals" element={<Manager><AttendanceApprovals /></Manager>} />
-        <Route path="attendance/monthly" element={<Manager><MonthlyReport /></Manager>} />
-        <Route path="settings" element={<Manager><Settings /></Manager>} />
-        <Route path="errors" element={<Manager><ErrorLog /></Manager>} />
+        <Route path="holidays" element={<Manager><Holidays /></Manager>} />
+
+        {/* Reports Hub */}
+        <Route path="reports" element={<Navigate to="/reports/daily" replace />} />
         <Route path="reports/daily" element={<Manager><DailyReport /></Manager>} />
+        <Route path="reports/monthly" element={<Manager><MonthlyReport /></Manager>} />
+        <Route path="attendance/monthly" element={<Navigate to="/reports/monthly" replace />} />
         <Route path="reports/summary" element={<Manager><SummaryReport /></Manager>} />
         <Route path="reports/employee/:id" element={<Manager><EmployeeReport /></Manager>} />
 
+        {/* Organization */}
+        <Route path="employees" element={<Manager><Employees /></Manager>} />
         <Route path="employees/pending" element={<RoleGate roles={['Admin']}><PendingApprovals /></RoleGate>} />
+        <Route path="departments" element={<Manager><Departments /></Manager>} />
+        <Route path="branches" element={<Manager><Branches /></Manager>} />
+        <Route path="unregistered" element={<Manager><UnregisteredIds /></Manager>} />
+
+        {/* System */}
+        <Route path="settings" element={<Manager><Settings /></Manager>} />
+        <Route path="errors" element={<Manager><ErrorLog /></Manager>} />
         <Route path="profile" element={<Profile />} />
         <Route path="my-attendance" element={<MyAttendance />} />
       </Route>

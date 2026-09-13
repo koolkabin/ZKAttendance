@@ -90,13 +90,50 @@ namespace ZKAttendance.Agent.Controllers
             return Ok(list);
         }
 
+        /// <summary>Add a device for this agent's branch via central server.</summary>
+        [HttpPost("devices")]
+        public async Task<IActionResult> CreateDevice([FromBody] CreateDeviceRequest request, CancellationToken ct)
+        {
+            var (ok, device, error) = await _central.CreateDeviceAsync(request, ct);
+            if (!ok) return BadRequest(new { message = error ?? "Failed to create device" });
+            return Ok(device);
+        }
+
+        /// <summary>Update device settings via central server.</summary>
+        [HttpPut("devices/{id:int}")]
+        public async Task<IActionResult> UpdateDevice(int id, [FromBody] UpdateDeviceRequest request, CancellationToken ct)
+        {
+            var (ok, device, error) = await _central.UpdateDeviceAsync(id, request, ct);
+            if (!ok) return BadRequest(new { message = error ?? "Failed to update device" });
+            return Ok(device);
+        }
+
+        /// <summary>Delete or deactivate a device via central server.</summary>
+        [HttpDelete("devices/{id:int}")]
+        public async Task<IActionResult> DeleteDevice(int id, CancellationToken ct)
+        {
+            var (ok, message, error) = await _central.DeleteDeviceAsync(id, ct);
+            if (!ok) return BadRequest(new { message = error ?? "Failed to delete device" });
+            return Ok(new { success = true, message });
+        }
+
+        /// <summary>Test connection to device over LAN directly from this agent.</summary>
+        [HttpPost("devices/{id:int}/test-connection")]
+        public async Task<IActionResult> TestConnection(int id, CancellationToken ct)
+        {
+            var result = await _sync.TestDeviceAsync(id, ct);
+            return Ok(result);
+        }
+
+        public record SyncApiRequest(DateTime? FromDate = null, DateTime? ToDate = null);
+
         /// <summary>
-        /// Read one device and queue what it holds. This is the Sync button.
+        /// Read one device and queue what it holds. Supports optional date range.
         /// </summary>
         [HttpPost("sync/{deviceId:int}")]
-        public async Task<IActionResult> Sync(int deviceId, CancellationToken ct)
+        public async Task<IActionResult> Sync(int deviceId, [FromBody] SyncApiRequest? request = null, CancellationToken ct = default)
         {
-            var run = await _sync.SyncDeviceAsync(deviceId, User.Identity?.Name ?? "local", ct);
+            var run = await _sync.SyncDeviceAsync(deviceId, User.Identity?.Name ?? "local", request?.FromDate, request?.ToDate, ct);
 
             return Ok(new
             {
@@ -105,19 +142,107 @@ namespace ZKAttendance.Agent.Controllers
                 run.Status,
                 run.RecordsRead,
                 run.RecordsQueued,
+                recordsStaged = run.RecordsQueued,
                 run.Message,
                 run.StartedAt,
                 run.FinishedAt
             });
         }
 
-        /// <summary>Recent sync runs, newest first.</summary>
+        /// <summary>Recent sync runs with breakdown of staged, sent, and failed records.</summary>
         [HttpGet("runs")]
         public async Task<IActionResult> Runs(CancellationToken ct)
-            => Ok(await _db.SyncRuns
+        {
+            var runs = await _db.SyncRuns
                 .OrderByDescending(r => r.SyncRunId)
-                .Take(25)
-                .ToListAsync(ct));
+                .Take(50)
+                .ToListAsync(ct);
+
+            var runIds = runs.Select(r => (long?)r.SyncRunId).ToList();
+
+            var punchStats = await _db.OutboxPunches
+                .Where(p => p.SyncRunId != null && runIds.Contains(p.SyncRunId))
+                .GroupBy(p => p.SyncRunId)
+                .Select(g => new
+                {
+                    SyncRunId = g.Key!.Value,
+                    Sent = g.Count(p => p.Status == OutboxStatus.Sent),
+                    Dead = g.Count(p => p.Status == OutboxStatus.Dead),
+                    Pending = g.Count(p => p.Status == OutboxStatus.Pending)
+                })
+                .ToDictionaryAsync(x => x.SyncRunId, ct);
+
+            var result = runs.Select(r =>
+            {
+                punchStats.TryGetValue(r.SyncRunId, out var stats);
+                return new
+                {
+                    r.SyncRunId,
+                    r.DeviceId,
+                    r.DeviceName,
+                    r.StartedAt,
+                    r.FinishedAt,
+                    r.Status,
+                    r.RecordsRead,
+                    recordsStaged = r.RecordsQueued,
+                    recordsSent = stats?.Sent ?? 0,
+                    recordsDead = stats?.Dead ?? 0,
+                    recordsPending = stats?.Pending ?? 0,
+                    r.Message,
+                    r.TriggeredBy
+                };
+            });
+
+            return Ok(result);
+        }
+
+        /// <summary>Details of one sync run including the staged punch list.</summary>
+        [HttpGet("runs/{id:long}")]
+        public async Task<IActionResult> RunDetails(long id, CancellationToken ct)
+        {
+            var run = await _db.SyncRuns.FirstOrDefaultAsync(r => r.SyncRunId == id, ct);
+            if (run is null) return NotFound(new { message = $"Sync run {id} not found." });
+
+            var punches = await _db.OutboxPunches
+                .Where(p => p.SyncRunId == id)
+                .OrderByDescending(p => p.OutboxId)
+                .Take(200)
+                .Select(p => new
+                {
+                    p.OutboxId,
+                    p.BiometricUserId,
+                    p.DeviceId,
+                    p.PunchTime,
+                    status = p.Status.ToString(),
+                    p.Attempts,
+                    p.LastError,
+                    p.SentAt,
+                    p.CreatedAt
+                })
+                .ToListAsync(ct);
+
+            var sent = punches.Count(p => p.status == "Sent");
+            var dead = punches.Count(p => p.status == "Dead");
+            var pending = punches.Count(p => p.status == "Pending");
+
+            return Ok(new
+            {
+                run.SyncRunId,
+                run.DeviceId,
+                run.DeviceName,
+                run.StartedAt,
+                run.FinishedAt,
+                run.Status,
+                run.RecordsRead,
+                recordsStaged = run.RecordsQueued,
+                recordsSent = sent,
+                recordsDead = dead,
+                recordsPending = pending,
+                run.Message,
+                run.TriggeredBy,
+                punches
+            });
+        }
 
         /// <summary>What is still waiting to reach App1.</summary>
         [HttpGet("outbox")]
@@ -194,6 +319,16 @@ namespace ZKAttendance.Agent.Controllers
 
             await _db.SaveChangesAsync(ct);
             return Ok(new { requeued = dead.Count });
+        }
+
+        /// <summary>Clear simulated or test records from the outbox buffer.</summary>
+        [HttpPost("outbox/clear")]
+        public async Task<IActionResult> ClearOutbox(CancellationToken ct)
+        {
+            var count = await _db.OutboxPunches.CountAsync(ct);
+            _db.OutboxPunches.RemoveRange(_db.OutboxPunches);
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { cleared = count, message = $"Cleared {count} records from outbox." });
         }
 
         /// <summary>A short summary from App1, so the office can sanity-check today.</summary>

@@ -10,6 +10,7 @@ import { useAuth } from '../context/AuthContext'
 import { useCalendar } from '../context/CalendarContext'
 import DateToggle from '../components/DateToggle'
 import NepaliDatePicker from '../components/NepaliDatePicker'
+import ReportTabs from '../components/ReportTabs'
 
 /** P / L / PT / A / H, coloured. Same notation as the attendance grid. */
 const MARK_STYLE = {
@@ -159,6 +160,8 @@ export default function MonthlyReport() {
           </div>
         }
       />
+
+      <ReportTabs />
 
       {error && <ErrorText>{error}</ErrorText>}
 

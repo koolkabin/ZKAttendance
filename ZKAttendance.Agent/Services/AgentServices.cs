@@ -20,6 +20,35 @@ namespace ZKAttendance.Agent.Services
 
     public record PunchBatchResponse(int Accepted, int Duplicates, int Rejected);
 
+    public record CreateDeviceRequest(
+        string DeviceName,
+        string DeviceIP,
+        int DevicePort = 4370,
+        int CommPassword = 0,
+        string? SerialNumber = null,
+        string? DeviceModel = null,
+        string? Role = "Slave",
+        bool? IsActive = true);
+
+    public record UpdateDeviceRequest(
+        string? DeviceName,
+        string? DeviceIP,
+        int DevicePort = 0,
+        int? CommPassword = null,
+        string? SerialNumber = null,
+        string? DeviceModel = null,
+        string? Role = null,
+        bool? IsActive = null);
+
+    public record DeviceTestResult(
+        bool Success,
+        string Message,
+        string? SerialNumber = null,
+        string? FirmwareVersion = null,
+        int UserCount = 0,
+        int LogCount = 0,
+        DateTime? DeviceTime = null);
+
     /// <summary>
     /// Everything App2 says to App1.
     ///
@@ -34,6 +63,12 @@ namespace ZKAttendance.Agent.Services
         Task<DeviceListResponse?> GetDevicesAsync(CancellationToken ct = default);
         Task<(bool ok, PunchBatchResponse? result, string? error, bool permanent)>
             SendPunchesAsync(IEnumerable<OutboxPunch> punches, CancellationToken ct = default);
+        Task<(bool ok, CentralDevice? device, string? error)>
+            CreateDeviceAsync(CreateDeviceRequest request, CancellationToken ct = default);
+        Task<(bool ok, CentralDevice? device, string? error)>
+            UpdateDeviceAsync(int deviceId, UpdateDeviceRequest request, CancellationToken ct = default);
+        Task<(bool ok, string? message, string? error)>
+            DeleteDeviceAsync(int deviceId, CancellationToken ct = default);
     }
 
     public class CentralClient : ICentralClient
@@ -168,6 +203,119 @@ namespace ZKAttendance.Agent.Services
 
             static string Trim(string s) => s.Length <= 200 ? s : s[..200];
         }
+
+        public async Task<(bool ok, CentralDevice? device, string? error)>
+            CreateDeviceAsync(CreateDeviceRequest request, CancellationToken ct = default)
+        {
+            var client = _factory.CreateClient(HttpClientName);
+            var body = new
+            {
+                agentKey = AgentKey,
+                secret = Secret,
+                deviceName = request.DeviceName,
+                deviceIP = request.DeviceIP,
+                devicePort = request.DevicePort,
+                commPassword = request.CommPassword,
+                serialNumber = request.SerialNumber,
+                deviceModel = request.DeviceModel,
+                role = request.Role,
+                isActive = request.IsActive
+            };
+
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, "api/Agent/devices")
+                {
+                    Content = JsonContent.Create(body)
+                };
+                req.Headers.Add("X-Agent-Secret", Secret);
+
+                var response = await client.SendAsync(req, ct);
+                if (response.IsSuccessStatusCode)
+                {
+                    var dev = await response.Content.ReadFromJsonAsync<CentralDevice>(cancellationToken: ct);
+                    return (true, dev, null);
+                }
+
+                var err = await response.Content.ReadAsStringAsync(ct);
+                return (false, null, err);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to create device via central");
+                return (false, null, ex.Message);
+            }
+        }
+
+        public async Task<(bool ok, CentralDevice? device, string? error)>
+            UpdateDeviceAsync(int deviceId, UpdateDeviceRequest request, CancellationToken ct = default)
+        {
+            var client = _factory.CreateClient(HttpClientName);
+            var body = new
+            {
+                agentKey = AgentKey,
+                secret = Secret,
+                deviceName = request.DeviceName,
+                deviceIP = request.DeviceIP,
+                devicePort = request.DevicePort,
+                commPassword = request.CommPassword,
+                serialNumber = request.SerialNumber,
+                deviceModel = request.DeviceModel,
+                role = request.Role,
+                isActive = request.IsActive
+            };
+
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Put, $"api/Agent/devices/{deviceId}")
+                {
+                    Content = JsonContent.Create(body)
+                };
+                req.Headers.Add("X-Agent-Secret", Secret);
+
+                var response = await client.SendAsync(req, ct);
+                if (response.IsSuccessStatusCode)
+                {
+                    var dev = await response.Content.ReadFromJsonAsync<CentralDevice>(cancellationToken: ct);
+                    return (true, dev, null);
+                }
+
+                var err = await response.Content.ReadAsStringAsync(ct);
+                return (false, null, err);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update device via central");
+                return (false, null, ex.Message);
+            }
+        }
+
+        public async Task<(bool ok, string? message, string? error)>
+            DeleteDeviceAsync(int deviceId, CancellationToken ct = default)
+        {
+            var client = _factory.CreateClient(HttpClientName);
+            try
+            {
+                var url = $"api/Agent/devices/{deviceId}?agentKey={Uri.EscapeDataString(AgentKey)}&secret={Uri.EscapeDataString(Secret)}";
+                using var req = new HttpRequestMessage(HttpMethod.Delete, url);
+                req.Headers.Add("X-Agent-Secret", Secret);
+
+                var response = await client.SendAsync(req, ct);
+                var content = await response.Content.ReadAsStringAsync(ct);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return (true, content, null);
+                }
+
+                return (false, null, content);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to delete device {DeviceId} via central", deviceId);
+                return (false, null, ex.Message);
+            }
+        }
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -184,7 +332,8 @@ namespace ZKAttendance.Agent.Services
     /// </summary>
     public interface IDeviceSyncService
     {
-        Task<SyncRun> SyncDeviceAsync(int deviceId, string? triggeredBy, CancellationToken ct = default);
+        Task<SyncRun> SyncDeviceAsync(int deviceId, string? triggeredBy, DateTime? fromDate = null, DateTime? toDate = null, CancellationToken ct = default);
+        Task<DeviceTestResult> TestDeviceAsync(int deviceId, CancellationToken ct = default);
     }
 
     public class DeviceSyncService : IDeviceSyncService
@@ -209,8 +358,50 @@ namespace ZKAttendance.Agent.Services
             _logger = logger;
         }
 
+        public async Task<DeviceTestResult> TestDeviceAsync(int deviceId, CancellationToken ct = default)
+        {
+            var list = await _central.GetDevicesAsync(ct);
+            var device = list?.Devices.FirstOrDefault(d => d.DeviceId == deviceId);
+            if (device is null)
+                return new DeviceTestResult(false, $"Device {deviceId} not found on central server.");
+
+            using var reader = _readerFactory();
+            try
+            {
+                if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
+                {
+                    return new DeviceTestResult(false, $"Could not connect to {device.DeviceName} at {device.DeviceIP}:{device.DevicePort}. Check device power and network.");
+                }
+
+                var info = await reader.GetDeviceInfoAsync();
+                await reader.DisconnectAsync();
+
+                if (info is null)
+                {
+                    return new DeviceTestResult(true, $"Connected to {device.DeviceName} successfully.");
+                }
+
+                return new DeviceTestResult(
+                    true,
+                    $"Connected to {device.DeviceName} successfully.",
+                    info.SerialNumber,
+                    info.FirmwareVersion,
+                    info.UserCount,
+                    info.LogCount,
+                    info.DeviceTime);
+            }
+            catch (Exception ex)
+            {
+                return new DeviceTestResult(false, $"Connection error: {ex.Message}");
+            }
+            finally
+            {
+                try { await reader.DisconnectAsync(); } catch { }
+            }
+        }
+
         public async Task<SyncRun> SyncDeviceAsync(
-            int deviceId, string? triggeredBy, CancellationToken ct = default)
+            int deviceId, string? triggeredBy, DateTime? fromDate = null, DateTime? toDate = null, CancellationToken ct = default)
         {
             // App1 owns the device list, so ask it rather than keeping a stale
             // copy here. One less thing that can drift.
@@ -252,25 +443,20 @@ namespace ZKAttendance.Agent.Services
                     return run;
                 }
 
-                // Ask for a window rather than everything. Most ZKTeco models
-                // cannot filter at all and hand back the whole log regardless,
-                // which is fine: the outbox unique index drops what we already
-                // have, and App1's unique index catches anything that slips by.
                 var days = _config.GetValue("Sync:LookbackDays", 7);
-                var since = DateTime.Today.AddDays(-days);
+                var since = fromDate ?? DateTime.Today.AddDays(-days);
+                var until = toDate?.Date.AddDays(1).AddTicks(-1);
 
                 var punches = await reader.GetAttendanceLogsAsync(since);
                 await reader.DisconnectAsync();
 
-                run.RecordsRead = punches.Count;
+                // Apply in-memory range filter
+                var filtered = punches.Where(p => p.PunchTime >= since && (!until.HasValue || p.PunchTime <= until.Value)).ToList();
+                run.RecordsRead = filtered.Count;
 
                 var queued = 0;
-                foreach (var p in punches)
+                foreach (var p in filtered)
                 {
-                    if (p.PunchTime < since) continue;
-
-                    // Cheap in-memory guard. The unique index below is the real
-                    // one, but checking here avoids a failed insert per row.
                     var exists = await _db.OutboxPunches.AnyAsync(
                         o => o.BiometricUserId == p.BiometricUserId
                              && o.PunchTime == p.PunchTime
@@ -298,15 +484,18 @@ namespace ZKAttendance.Agent.Services
                 run.RecordsQueued = queued;
                 run.Status = "Success";
                 run.FinishedAt = DateTime.Now;
+                var rangeText = fromDate.HasValue
+                    ? (toDate.HasValue ? $" ({fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd})" : $" (since {fromDate:yyyy-MM-dd})")
+                    : "";
                 run.Message = queued == 0
-                    ? $"Read {punches.Count} record(s). Nothing new to send."
-                    : $"Read {punches.Count} record(s), queued {queued} for the central server.";
+                    ? $"Read {filtered.Count} record(s){rangeText}. Nothing new to send."
+                    : $"Read {filtered.Count} record(s){rangeText}, queued {queued} for the central server.";
 
                 await _db.SaveChangesAsync(ct);
 
                 _logger.LogInformation(
                     "Sync of {Device}: read {Read}, queued {Queued}",
-                    device.DeviceName, punches.Count, queued);
+                    device.DeviceName, filtered.Count, queued);
 
                 return run;
             }

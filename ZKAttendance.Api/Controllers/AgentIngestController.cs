@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -135,6 +135,158 @@ namespace ZKAttendance.Api.Controllers
                 deviceCount   = devices.Count,
                 devices
             });
+        }
+
+        // ── POST api/Agent/devices ───────────────────────────────────
+        /// <summary>Allows an agent to add a new device for its branch.</summary>
+        [HttpPost("devices")]
+        public async Task<IActionResult> CreateDevice(
+            [FromBody] AgentCreateDeviceRequest body,
+            [FromHeader(Name = "X-Agent-Secret")] string? secret,
+            CancellationToken ct)
+        {
+            var server = await AuthAsync(body.AgentKey, secret ?? body.Secret, ct);
+            if (server is null) return Unauthorized(new { message = "Invalid agent key or secret." });
+
+            if (string.IsNullOrWhiteSpace(body.DeviceName) || string.IsNullOrWhiteSpace(body.DeviceIP))
+                return BadRequest(new { message = "Device Name and IP address are required." });
+
+            if (!Enum.TryParse<DeviceRole>(body.Role ?? "Slave", true, out var role))
+                role = DeviceRole.Slave;
+
+            var device = new Device
+            {
+                DeviceName = body.DeviceName.Trim(),
+                DeviceIP = body.DeviceIP.Trim(),
+                DevicePort = body.DevicePort > 0 ? body.DevicePort : 4370,
+                CommPassword = body.CommPassword,
+                SerialNumber = body.SerialNumber?.Trim(),
+                DeviceModel = body.DeviceModel?.Trim(),
+                Role = role,
+                BranchId = server.BranchId,
+                IsActive = body.IsActive ?? true,
+                CreatedDate = DateTime.Now
+            };
+
+            _db.Devices.Add(device);
+            await _db.SaveChangesAsync(ct);
+
+            return Ok(new
+            {
+                device.DeviceId,
+                device.DeviceName,
+                device.DeviceIP,
+                device.DevicePort,
+                device.CommPassword,
+                device.SerialNumber,
+                device.DeviceModel,
+                role = device.Role.ToString(),
+                device.IsActive,
+                device.IsOnline,
+                message = "Device added successfully."
+            });
+        }
+
+        // ── PUT api/Agent/devices/{id} ───────────────────────────────
+        /// <summary>Allows an agent to update a device assigned to its branch.</summary>
+        [HttpPut("devices/{id:int}")]
+        public async Task<IActionResult> UpdateDevice(
+            int id,
+            [FromBody] AgentUpdateDeviceRequest body,
+            [FromHeader(Name = "X-Agent-Secret")] string? secret,
+            CancellationToken ct)
+        {
+            var server = await AuthAsync(body.AgentKey, secret ?? body.Secret, ct);
+            if (server is null) return Unauthorized(new { message = "Invalid agent key or secret." });
+
+            var device = await _db.Devices.FirstOrDefaultAsync(d => d.DeviceId == id && d.BranchId == server.BranchId, ct);
+            if (device is null)
+                return NotFound(new { message = $"Device {id} not found in this agent's branch." });
+
+            if (!string.IsNullOrWhiteSpace(body.DeviceName)) device.DeviceName = body.DeviceName.Trim();
+            if (!string.IsNullOrWhiteSpace(body.DeviceIP)) device.DeviceIP = body.DeviceIP.Trim();
+            if (body.DevicePort > 0) device.DevicePort = body.DevicePort;
+            if (body.CommPassword.HasValue) device.CommPassword = body.CommPassword.Value;
+            if (body.SerialNumber is not null) device.SerialNumber = body.SerialNumber.Trim();
+            if (body.DeviceModel is not null) device.DeviceModel = body.DeviceModel.Trim();
+            if (body.IsActive.HasValue) device.IsActive = body.IsActive.Value;
+            if (!string.IsNullOrWhiteSpace(body.Role) && Enum.TryParse<DeviceRole>(body.Role, true, out var role))
+                device.Role = role;
+
+            await _db.SaveChangesAsync(ct);
+
+            return Ok(new
+            {
+                device.DeviceId,
+                device.DeviceName,
+                device.DeviceIP,
+                device.DevicePort,
+                device.CommPassword,
+                device.SerialNumber,
+                device.DeviceModel,
+                role = device.Role.ToString(),
+                device.IsActive,
+                device.IsOnline,
+                message = "Device updated successfully."
+            });
+        }
+
+        // ── DELETE api/Agent/devices/{id} ────────────────────────────
+        /// <summary>Allows an agent to delete/deactivate a device assigned to its branch.</summary>
+        [HttpDelete("devices/{id:int}")]
+        public async Task<IActionResult> DeleteDevice(
+            int id,
+            [FromQuery] string? agentKey,
+            [FromQuery] string? secret,
+            [FromHeader(Name = "X-Agent-Key")] string? headerKey,
+            [FromHeader(Name = "X-Agent-Secret")] string? headerSecret,
+            CancellationToken ct)
+        {
+            var key = !string.IsNullOrWhiteSpace(headerKey) ? headerKey : agentKey;
+            var sec = !string.IsNullOrWhiteSpace(headerSecret) ? headerSecret : secret;
+
+            var server = await AuthAsync(key, sec, ct);
+            if (server is null) return Unauthorized(new { message = "Invalid agent key or secret." });
+
+            var device = await _db.Devices.FirstOrDefaultAsync(d => d.DeviceId == id && d.BranchId == server.BranchId, ct);
+            if (device is null)
+                return NotFound(new { message = $"Device {id} not found in this agent's branch." });
+
+            // Check if device has recorded attendance logs
+            var hasLogs = await _db.AttendanceLogs.AnyAsync(l => l.DeviceId == id, ct);
+            if (hasLogs)
+            {
+                // Soft-delete / deactivate to preserve historical attendance integrity
+                device.IsActive = false;
+                device.ModifiedDate = DateTime.Now;
+                await _db.SaveChangesAsync(ct);
+
+                return Ok(new
+                {
+                    deviceId = id,
+                    softDeleted = true,
+                    message = $"Device '{device.DeviceName}' has historical attendance logs and was deactivated to preserve records."
+                });
+            }
+            else
+            {
+                // Clean up any employee-device mappings
+                var links = await _db.EmployeeDevices.Where(ed => ed.DeviceId == id).ToListAsync(ct);
+                if (links.Count > 0)
+                {
+                    _db.EmployeeDevices.RemoveRange(links);
+                }
+
+                _db.Devices.Remove(device);
+                await _db.SaveChangesAsync(ct);
+
+                return Ok(new
+                {
+                    deviceId = id,
+                    softDeleted = false,
+                    message = $"Device '{device.DeviceName}' deleted successfully."
+                });
+            }
         }
 
         // ── POST api/Agent/punches ───────────────────────────────────
@@ -291,4 +443,28 @@ namespace ZKAttendance.Api.Controllers
     public record AgentPunchBatchRequest(
         string AgentKey,
         List<AgentPunchItem> Punches);
+
+    public record AgentCreateDeviceRequest(
+        string AgentKey,
+        string? Secret,
+        string DeviceName,
+        string DeviceIP,
+        int DevicePort = 4370,
+        int CommPassword = 0,
+        string? SerialNumber = null,
+        string? DeviceModel = null,
+        string? Role = "Slave",
+        bool? IsActive = true);
+
+    public record AgentUpdateDeviceRequest(
+        string AgentKey,
+        string? Secret,
+        string? DeviceName,
+        string? DeviceIP,
+        int DevicePort = 0,
+        int? CommPassword = null,
+        string? SerialNumber = null,
+        string? DeviceModel = null,
+        string? Role = null,
+        bool? IsActive = null);
 }

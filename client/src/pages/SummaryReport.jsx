@@ -13,7 +13,8 @@ import EmployeeCalendarModal from '../components/EmployeeCalendarModal'
 import { useCalendar } from '../context/CalendarContext'
 import DateToggle from '../components/DateToggle'
 import { adToBs, MONTH_NAMES_EN, getDaysInBsMonth } from '../lib/nepaliCalendar'
-import { bsToAdIso } from '../components/NepaliDatePicker'
+import NepaliDatePicker, { bsToAdIso } from '../components/NepaliDatePicker'
+import ReportTabs from '../components/ReportTabs'
 
 const iso = (d) => ymd(d)
 const pad = (n) => String(n).padStart(2, '0')
@@ -308,6 +309,8 @@ export default function SummaryReport() {
           </div>
         }
       />
+
+      <ReportTabs />
 
       {/* Filter Bar */}
       <Card className="mb-4 p-4">

@@ -7,6 +7,7 @@ import DayDetailModal from '../components/DayDetailModal'
 import { useCalendar } from '../context/CalendarContext'
 import DateToggle from '../components/DateToggle'
 import NepaliDatePicker from '../components/NepaliDatePicker'
+import ReportTabs from '../components/ReportTabs'
 
 export default function DailyReport() {
   const { isBs } = useCalendar()
@@ -58,6 +59,8 @@ export default function DailyReport() {
         subtitle={subtitle}
         actions={<DateToggle />}
       />
+
+      <ReportTabs />
 
       <Card className="mb-4 p-4">
         <form onSubmit={(e) => { e.preventDefault(); setApplied(date) }} className="flex items-end gap-3">
