@@ -29,8 +29,13 @@ export default function Login({ onLogin }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <form onSubmit={submit} className="card w-full max-w-sm p-6">
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Agent</h1>
-        <p className="mt-1 text-sm text-slate-500">Sign in with your central server account.</p>
+        <div className="mb-5 flex items-center gap-3">
+          <img src="/favicon.png" alt="Danfe Logo" className="h-10 w-10 rounded-xl bg-white p-1 object-contain shadow-xs ring-1 ring-slate-200" />
+          <div>
+            <h1 className="text-lg font-bold text-slate-900">Attendance Agent</h1>
+            <p className="text-xs text-slate-500">Sign in with your central server account.</p>
+          </div>
+        </div>
 
         {error && (
           <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-rose-200">

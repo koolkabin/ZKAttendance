@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ZKAttendance.Api.Security;
+using ZKAttendance.Application.Abstractions;
 using ZKAttendance.Application.Dtos;
 using ZKAttendance.Application.Dtos.Api;
 using ZKAttendance.Application.Services.Attendances;
@@ -29,6 +30,7 @@ namespace ZKAttendance.Api.Controllers
         private readonly AttendanceQueryService _query;
         private readonly AttendanceCalculationService _calc;
         private readonly LookupService _lookups;
+        private readonly IAttendancePolicyService _policyService;
         private readonly ILogger<AttendanceLogApiController> _logger;
 
         public AttendanceLogApiController(
@@ -36,13 +38,48 @@ namespace ZKAttendance.Api.Controllers
             AttendanceQueryService query,
             AttendanceCalculationService calc,
             LookupService lookups,
+            IAttendancePolicyService policyService,
             ILogger<AttendanceLogApiController> logger)
         {
             _context = context;
             _query = query;
             _calc = calc;
             _lookups = lookups;
+            _policyService = policyService;
             _logger = logger;
+        }
+
+        /// <summary>
+        /// Upcoming and current-month holidays. Any authenticated user can call this;
+        /// used by the Employee Dashboard holiday panel.
+        /// </summary>
+        [HttpGet("holidays/upcoming")]
+        [ProducesResponseType(200)]
+        public async Task<IActionResult> UpcomingHolidays([FromQuery] int days = 90)
+        {
+            var today = DateTime.Today;
+            var monthStart = new DateTime(today.Year, today.Month, 1);
+            var until = today.AddDays(days);
+
+            var rows = await _context.Holidays.AsNoTracking()
+                .Where(h => h.IsActive && (
+                    (h.HolidayDate >= monthStart && h.HolidayDate < today) ||
+                    (h.HolidayDate >= today && h.HolidayDate <= until)
+                ))
+                .OrderBy(h => h.HolidayDate)
+                .Select(h => new
+                {
+                    h.HolidayId,
+                    h.HolidayName,
+                    date = h.HolidayDate,
+                    h.HolidayType,
+                    h.Description,
+                    isPast = h.HolidayDate < today,
+                    daysUntil = (int)(h.HolidayDate.Date - today).TotalDays
+                })
+                .ToListAsync();
+
+            return Ok(rows);
         }
 
         /// <summary>
@@ -335,6 +372,147 @@ namespace ZKAttendance.Api.Controllers
                 totalDays = rows.Count,
                 totalHours = rows.Sum(v => v.WorkingHours),
                 items = rows
+            });
+        }
+
+        /// <summary>
+        /// Attendance summary for the current month – the signed-in employee's
+        /// own data. Returns presentDays, lateDays, totalHours, and the last 7
+        /// attendance records so the User Dashboard can show warnings.
+        /// </summary>
+        [HttpGet("my-summary")]
+        [ProducesResponseType(200)]
+        public async Task<IActionResult> MySummary()
+        {
+            var today = DateTime.Today;
+            var monthStart = new DateTime(today.Year, today.Month, 1);
+
+            var employeeId = await CurrentEmployeeIdAsync();
+            if (employeeId is null)
+                return Ok(new { linked = false });
+
+            // All logs for the current month
+            var logs = await _context.AttendanceLogs.AsNoTracking()
+                .Where(a => a.EmployeeId == employeeId.Value
+                            && a.AttendanceTime.Date >= monthStart
+                            && a.AttendanceTime.Date <= today)
+                .ToListAsync();
+
+            var employees = await _query.GetEmployeesDictionary(new List<int> { employeeId.Value });
+            var branches = await _query.GetBranchesDictionary(logs.Select(l => l.BranchId).Distinct().ToList());
+            var devices = await _query.GetDevicesDictionary(logs.Select(l => l.DeviceId).Distinct().ToList());
+
+            var rows = (await _calc.BuildAttendanceViewModels(logs, employees, branches, devices))
+                .OrderByDescending(v => v.Date)
+                .ToList();
+
+            // Late arrivals: check-in after office start + grace, using policy
+            var policy = await _policyService.GetAsync();
+
+            var officeStart = policy.OfficeStartTime;
+            var graceMinutes = policy.GraceMinutes;
+            var cutoff = officeStart.Add(TimeSpan.FromMinutes(graceMinutes));
+
+            // Group raw logs to get first punch per day for late detection
+            var firstPunches = logs
+                .GroupBy(l => l.AttendanceTime.Date)
+                .ToDictionary(g => g.Key, g => g.Min(l => l.AttendanceTime).TimeOfDay);
+
+            var lateDays = firstPunches.Values.Count(t => t > cutoff);
+
+            // Days with any attendance record
+            var presentDays = rows.Count(r => r.CheckInTime.HasValue);
+            var totalHours = rows.Sum(r => r.WorkingHours);
+
+            var emp = await _context.Employees.AsNoTracking()
+                .Include(e => e.Department)
+                .FirstOrDefaultAsync(e => e.EmployeeId == employeeId.Value);
+
+            // Calculate working days up to today (excluding Saturday)
+            int workingDaysToDate = 0;
+            for (var d = monthStart; d <= today; d = d.AddDays(1))
+            {
+                if (d.DayOfWeek != DayOfWeek.Saturday)
+                    workingDaysToDate++;
+            }
+
+            // Recent 7 records for the table
+            var recentLogs = rows.Take(7).Select(r => new
+            {
+                date = r.Date.ToString("yyyy-MM-dd"),
+                nepaliDate = r.NepaliDate,
+                checkIn = r.CheckInTime?.ToString("HH:mm"),
+                checkOut = r.CheckOutTime?.ToString("HH:mm"),
+                hours = Math.Round(r.WorkingHours, 2),
+                status = r.Status,
+                isLate = r.CheckInTime.HasValue && r.CheckInTime.Value.TimeOfDay > cutoff,
+                minutesLate = r.CheckInTime.HasValue && r.CheckInTime.Value.TimeOfDay > cutoff
+                    ? (int)Math.Ceiling((r.CheckInTime.Value.TimeOfDay - officeStart).TotalMinutes)
+                    : 0
+            });
+
+            // All logs for the month ordered chronologically for trends
+            var monthLogs = rows.OrderBy(r => r.Date).Select(r => new
+            {
+                date = r.Date.ToString("yyyy-MM-dd"),
+                day = r.Date.Day,
+                nepaliDate = r.NepaliDate,
+                checkIn = r.CheckInTime?.ToString("HH:mm"),
+                checkOut = r.CheckOutTime?.ToString("HH:mm"),
+                hours = Math.Round(r.WorkingHours, 2),
+                status = r.Status,
+                isLate = r.CheckInTime.HasValue && r.CheckInTime.Value.TimeOfDay > cutoff,
+                minutesLate = r.CheckInTime.HasValue && r.CheckInTime.Value.TimeOfDay > cutoff
+                    ? (int)Math.Ceiling((r.CheckInTime.Value.TimeOfDay - officeStart).TotalMinutes)
+                    : 0
+            });
+
+            // Today's status
+            var todayRow = rows.FirstOrDefault(r => r.Date.Date == today);
+            var todayStatus = todayRow != null
+                ? new
+                {
+                    hasRecord = true,
+                    checkIn = todayRow.CheckInTime?.ToString("HH:mm"),
+                    checkOut = todayRow.CheckOutTime?.ToString("HH:mm"),
+                    isLate = todayRow.CheckInTime.HasValue && todayRow.CheckInTime.Value.TimeOfDay > cutoff,
+                    minutesLate = todayRow.CheckInTime.HasValue && todayRow.CheckInTime.Value.TimeOfDay > cutoff
+                        ? (int)Math.Ceiling((todayRow.CheckInTime.Value.TimeOfDay - officeStart).TotalMinutes)
+                        : 0,
+                    status = todayRow.Status
+                }
+                : (object)new { hasRecord = false };
+
+            return Ok(new
+            {
+                linked = true,
+                employee = emp != null ? new
+                {
+                    id = emp.EmployeeId,
+                    name = emp.EmployeeName,
+                    title = emp.Title ?? "Employee",
+                    department = emp.Department?.DepartmentName,
+                    photoUrl = emp.PhotoUrl,
+                    email = emp.Email,
+                    biometricId = emp.BiometricUserId
+                } : null,
+                monthYear = today.ToString("yyyy-MM"),
+                presentDays,
+                lateDays,
+                onTimeDays = Math.Max(0, presentDays - lateDays),
+                workingDays = workingDaysToDate,
+                attendanceRate = workingDaysToDate > 0
+                    ? Math.Round((double)presentDays / workingDaysToDate * 100, 1)
+                    : 100,
+                avgWorkingHours = presentDays > 0
+                    ? Math.Round(totalHours / presentDays, 1)
+                    : 0,
+                totalHours = Math.Round(totalHours, 1),
+                today = todayStatus,
+                recentLogs,
+                monthLogs,
+                officeStartTime = officeStart.ToString(@"hh\:mm"),
+                graceMinutes
             });
         }
 

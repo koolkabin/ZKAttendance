@@ -50,6 +50,9 @@ namespace ZKAttendance.Infrastructure.Persistence
         // Agent registration
         public DbSet<LocalServer> LocalServers { get; set; }
 
+        // Leave Management
+        public DbSet<LeaveRequest> LeaveRequests { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -573,6 +576,25 @@ namespace ZKAttendance.Infrastructure.Persistence
                       .WithMany()
                       .HasForeignKey(e => e.BranchId)
                       .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ═════════════════════════════════════════════════════════════
+            // LeaveRequest - Employee leave requests & approvals
+            // ═════════════════════════════════════════════════════════════
+            modelBuilder.Entity<LeaveRequest>(entity =>
+            {
+                entity.HasKey(e => e.LeaveRequestId);
+
+                entity.HasOne(e => e.Employee)
+                      .WithMany()
+                      .HasForeignKey(e => e.EmployeeId)
+                      .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasIndex(e => new { e.EmployeeId, e.StartDate, e.EndDate })
+                      .HasDatabaseName("IX_LeaveRequest_Employee_Dates");
+
+                entity.HasIndex(e => e.Status)
+                      .HasDatabaseName("IX_LeaveRequest_Status");
             });
         }
     }

@@ -154,6 +154,16 @@ export default function EmployeeReport() {
       .catch(() => {})
   }, [id, todayIso])
 
+  const currentYear = useMemo(() => {
+    return isBs ? Number(todayBs?.year) || 2082 : today.getFullYear()
+  }, [isBs, today, todayBs])
+
+  const currentMonth = useMemo(() => {
+    return isBs ? Number(todayBs?.month) || 5 : today.getMonth() + 1
+  }, [isBs, today, todayBs])
+
+  const isAtLatest = Number(selectedYear) >= currentYear && Number(selectedMonth) >= currentMonth
+
   // Month navigation
   function prevMonth() {
     if (selectedMonth === 1) {
@@ -165,7 +175,9 @@ export default function EmployeeReport() {
   }
 
   function nextMonth() {
+    if (isAtLatest) return
     if (selectedMonth === 12) {
+      if (Number(selectedYear) >= currentYear) return
       setSelectedYear((y) => y + 1)
       setSelectedMonth(1)
     } else {
@@ -174,21 +186,32 @@ export default function EmployeeReport() {
   }
 
   function jumpToCurrentMonth() {
-    if (isBs) {
-      const bs = adToBs(today)
-      setSelectedYear(bs?.year || 2082)
-      setSelectedMonth(bs?.month || 5)
-    } else {
-      setSelectedYear(today.getFullYear())
-      setSelectedMonth(today.getMonth() + 1)
-    }
+    setSelectedYear(currentYear)
+    setSelectedMonth(currentMonth)
   }
 
-  // Year options (current - 3 to current + 1)
+  // Year options (current - 3 to current, future years restricted)
   const yearOptions = useMemo(() => {
-    const cur = isBs ? todayBs?.year || 2082 : today.getFullYear()
-    return [cur + 1, cur, cur - 1, cur - 2, cur - 3]
-  }, [isBs, today, todayBs])
+    return [currentYear, currentYear - 1, currentYear - 2, currentYear - 3]
+  }, [currentYear])
+
+  // Month options (capped at current month if current year is selected)
+  const monthOptions = useMemo(() => {
+    const names = isBs ? MONTH_NAMES_EN : AD_MONTHS
+    const maxMonth = Number(selectedYear) === currentYear ? currentMonth : 12
+    return names
+      .map((name, i) => ({ value: i + 1, name }))
+      .filter((m) => m.value <= maxMonth)
+  }, [isBs, selectedYear, currentYear, currentMonth])
+
+  // Clamp selected year and month if they exceed current year/month
+  useEffect(() => {
+    if (Number(selectedYear) > currentYear) {
+      setSelectedYear(currentYear)
+    } else if (Number(selectedYear) === currentYear && Number(selectedMonth) > currentMonth) {
+      setSelectedMonth(currentMonth)
+    }
+  }, [selectedYear, selectedMonth, currentYear, currentMonth])
 
   // Flattened employee attendance row
   const empOverview = useMemo(() => {
@@ -750,9 +773,9 @@ export default function EmployeeReport() {
                   onChange={(e) => setSelectedMonth(Number(e.target.value))}
                   className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700 shadow-2xs focus:border-sky-500 focus:outline-none"
                 >
-                  {(isBs ? MONTH_NAMES_EN : AD_MONTHS).map((name, i) => (
-                    <option key={name} value={i + 1}>
-                      {name}
+                  {monthOptions.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.name}
                     </option>
                   ))}
                 </select>
@@ -773,8 +796,13 @@ export default function EmployeeReport() {
                 <button
                   type="button"
                   onClick={nextMonth}
-                  className="p-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-colors cursor-pointer"
-                  title="Next Month"
+                  disabled={isAtLatest}
+                  className={`p-1 rounded-md border border-slate-200 transition-colors ${
+                    isAtLatest
+                      ? 'opacity-40 cursor-not-allowed bg-slate-100 text-slate-400'
+                      : 'bg-white hover:bg-slate-50 text-slate-600 cursor-pointer'
+                  }`}
+                  title={isAtLatest ? 'Cannot select future month' : 'Next Month'}
                 >
                   <FaChevronRight className="h-2.5 w-2.5" />
                 </button>

@@ -45,15 +45,18 @@ namespace ZKAttendance.Infrastructure.Services.Employees
             foreach (var deviceId in deviceIds.Distinct())
             {
                 var supplied = deviceUserIds is not null
-                               && deviceUserIds.TryGetValue(deviceId, out var given)
-                               && !string.IsNullOrWhiteSpace(given)
+                                && deviceUserIds.TryGetValue(deviceId, out var given)
+                                && !string.IsNullOrWhiteSpace(given)
                     ? given.Trim()
                     : null;
 
                 var kept = previous.TryGetValue(deviceId, out var old)
                            && !string.IsNullOrWhiteSpace(old) ? old : null;
 
-                var deviceUserId = supplied ?? kept ?? employee.BiometricUserId;
+                // Prefer explicit supplied ID, then current employee BiometricUserId, then kept legacy ID
+                var deviceUserId = supplied 
+                    ?? (!string.IsNullOrWhiteSpace(employee.BiometricUserId) ? employee.BiometricUserId : kept)
+                    ?? throw new InvalidOperationException($"No biometric ID available for employee {employeeId} on device {deviceId}");
 
                 // On one device an enrol number belongs to exactly one person.
                 var clash = await _context.EmployeeDevices
@@ -80,7 +83,7 @@ namespace ZKAttendance.Infrastructure.Services.Employees
                 _context.EmployeeDevices.Add(link);
                 result.Add(new DeviceAssignment(deviceId, deviceUserId, link.IsEnrolled));
 
-                // Retroactively attribute previous unmapped punches for this biometric user on this device
+                // Retroactively attribute punches for this biometric user on this device
                 var unmapped = await _context.AttendanceLogs
                     .Where(a => a.DeviceId == deviceId && a.BiometricUserId == deviceUserId && a.EmployeeId == null)
                     .ToListAsync(ct);

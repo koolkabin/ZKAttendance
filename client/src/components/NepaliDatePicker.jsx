@@ -118,6 +118,7 @@ export default function NepaliDatePicker({
               selectedIso={value || undefined}
               maxIso={maxIso}
               minIso={min}
+              disableFuture={disableFuture}
               onDayClick={(cell) => {
                 onChange(cell.adIso)
                 setOpen(false)
@@ -133,7 +134,7 @@ export default function NepaliDatePicker({
                     }}
                     className="font-medium text-sky-600 hover:underline"
                   >
-                    Today · {dmy(today)}
+                    Today · {formatDate(today)}
                   </button>
                   <div className="flex items-center gap-3">
                     {clearable && value && (

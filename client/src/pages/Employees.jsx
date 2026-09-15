@@ -615,6 +615,21 @@ export default function Employees() {
     e.preventDefault()
     setSaving(true)
     setFormError('')
+
+    const name = form.employeeName?.trim()
+    if (!name) {
+      setFormError('Employee name is required.')
+      setSaving(false)
+      return
+    }
+
+    const deptId = form.departmentId ? Number(form.departmentId) : null
+    if (!deptId) {
+      setFormError('Department is required. Please select a department.')
+      setSaving(false)
+      return
+    }
+
     try {
       const payload = toPayload(form)
       const isNew = !editing.employeeId
@@ -1095,12 +1110,13 @@ export default function Employees() {
                 />
               </Field>
 
-              <Field label="Department">
+              <Field label="Department" required>
                 <Select
                   value={form.departmentId}
                   onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
+                  required
                 >
-                  <option value="">None</option>
+                  <option value="">Select a department…</option>
                   {departments.map((d) => (
                     <option key={d.departmentId} value={d.departmentId}>
                       {d.departmentName}

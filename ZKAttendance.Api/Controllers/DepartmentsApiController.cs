@@ -291,6 +291,16 @@ namespace ZKAttendance.Api.Controllers
         [ProducesResponseType(typeof(ApiError), 400)]
         public async Task<IActionResult> Create([FromBody] EmployeeRequest request)
         {
+            if (string.IsNullOrWhiteSpace(request.EmployeeName))
+                return BadRequest(ApiError.From("Employee name is required."));
+
+            if (!request.DepartmentId.HasValue || request.DepartmentId.Value <= 0)
+                return BadRequest(ApiError.From("Department is required. Please select a department."));
+
+            var deptExists = await _db.Departments.AnyAsync(d => d.DepartmentId == request.DepartmentId.Value);
+            if (!deptExists)
+                return BadRequest(ApiError.From("Selected department does not exist."));
+
             var biometricId = string.IsNullOrWhiteSpace(request.BiometricUserId)
                 ? await _employees.GetNextBiometricUserIdAsync()
                 : request.BiometricUserId.Trim();
@@ -515,6 +525,16 @@ namespace ZKAttendance.Api.Controllers
                     $"Email '{request.Email!.Trim()}' already belongs to another employee. " +
                     "Each person needs their own address so attendance emails reach the right one."));
 
+            if (string.IsNullOrWhiteSpace(request.EmployeeName))
+                return BadRequest(ApiError.From("Employee name is required."));
+
+            if (!request.DepartmentId.HasValue || request.DepartmentId.Value <= 0)
+                return BadRequest(ApiError.From("Department is required. Please select a department."));
+
+            var deptExists = await _db.Departments.AnyAsync(d => d.DepartmentId == request.DepartmentId.Value);
+            if (!deptExists)
+                return BadRequest(ApiError.From("Selected department does not exist."));
+
             existing.EmployeeName = request.EmployeeName;
             existing.DepartmentId = request.DepartmentId;
             existing.DefaultShiftId = request.DefaultShiftId;
@@ -678,6 +698,25 @@ namespace ZKAttendance.Api.Controllers
                 .ToList();
 
             return Ok(result);
+        }
+
+        /// <summary>
+        /// Reconciles attendance log mappings against active employee biometric IDs and device assignments.
+        /// Repairs punches that were misattributed or unlinked due to ID changes.
+        /// </summary>
+        [HttpPost("reconcile-attendance")]
+        [Authorize(Roles = Roles.Management)]
+        [ProducesResponseType(200)]
+        public async Task<IActionResult> ReconcileAttendance()
+        {
+            var repaired = await _employees.ReconcileAttendanceLogMappingsAsync();
+            return Ok(new
+            {
+                repaired,
+                message = repaired == 0
+                    ? "All attendance logs are properly attributed."
+                    : $"Successfully repaired {repaired} attendance log mapping(s)."
+            });
         }
 
         private object Shape(Employee e, object? login = null) => new

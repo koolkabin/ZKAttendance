@@ -70,6 +70,7 @@ builder.Services.AddTransient<Func<IZkDeviceReader>>(sp => () =>
 // has to press anything for recovery.
 builder.Services.AddHostedService<OutboxDrainService>();
 builder.Services.AddHostedService<HeartbeatService>();
+builder.Services.AddHostedService<AutoDeviceSyncService>();
 
 var app = builder.Build();
 

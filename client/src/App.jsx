@@ -20,6 +20,9 @@ import Profile from './pages/Profile'
 import MyAttendance from './pages/MyAttendance'
 import PendingApprovals from './pages/PendingApprovals'
 import UnregisteredIds from './pages/UnregisteredIds'
+import UserDashboard from './pages/UserDashboard'
+import MyHolidays from './pages/MyHolidays'
+import LeaveRequests from './pages/LeaveRequests'
 
 const MGMT = ['Admin', 'HR']
 
@@ -29,7 +32,7 @@ function Manager({ children }) {
 
 function Home() {
   const { isManager } = useAuth()
-  return isManager ? <Dashboard /> : <Navigate to="/my-attendance" replace />
+  return isManager ? <Dashboard /> : <UserDashboard />
 }
 
 export default function App() {
@@ -71,6 +74,8 @@ export default function App() {
         <Route path="errors" element={<Manager><ErrorLog /></Manager>} />
         <Route path="profile" element={<Profile />} />
         <Route path="my-attendance" element={<MyAttendance />} />
+        <Route path="my-holidays" element={<MyHolidays />} />
+        <Route path="leave-requests" element={<LeaveRequests />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

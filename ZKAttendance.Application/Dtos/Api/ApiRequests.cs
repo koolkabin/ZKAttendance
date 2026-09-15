@@ -71,6 +71,7 @@ namespace ZKAttendance.Application.Dtos.Api
         [StringLength(12)]
         public string? BiometricUserId { get; set; }
 
+        [Required(ErrorMessage = "Department is required.")]
         public int? DepartmentId { get; set; }
         public int? DefaultShiftId { get; set; }
 

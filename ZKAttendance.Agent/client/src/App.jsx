@@ -62,13 +62,7 @@ function Header({ user, status, onLogout }) {
         <button onClick={() => navigate('/dashboard')} className="text-left group flex items-center gap-3">
           <div>
             <div className="text-base font-bold tracking-tight text-white group-hover:text-sky-300 transition">
-              ZK<span className="text-sky-400">Attendance</span>
-              <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300 border border-slate-700">
-                Agent
-              </span>
-            </div>
-            <div className="text-xs text-slate-400">
-              {status?.serverName ? `${status.serverName} · ${status.branchName ?? ''}` : 'Local Server'}
+              ZK<span className="text-sky-400"> Agent</span>
             </div>
           </div>
         </button>
