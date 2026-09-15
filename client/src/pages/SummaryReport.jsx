@@ -73,51 +73,75 @@ export default function SummaryReport() {
     }
   }, [isBs, today])
 
-  // Year options: current year and prior years
-  const yearOptions = useMemo(() => {
-    const current = isBs ? todayBs?.year || 2083 : today.getFullYear()
-    return [current + 1, current, current - 1, current - 2, current - 3]
+  const currentYear = useMemo(() => {
+    return isBs ? Number(todayBs?.year) || 2083 : today.getFullYear()
   }, [isBs, today, todayBs])
 
-  // Month options (1-12) with names for the active calendar
+  const currentMonth = useMemo(() => {
+    return isBs ? Number(todayBs?.month) || 5 : today.getMonth() + 1
+  }, [isBs, today, todayBs])
+
+  // Year options: current year and prior years (future years restricted)
+  const yearOptions = useMemo(() => {
+    return [currentYear, currentYear - 1, currentYear - 2, currentYear - 3]
+  }, [currentYear])
+
+  // Month options: capped at current month if current year is selected
   const monthOptions = useMemo(() => {
-    if (isBs) {
-      return MONTH_NAMES_EN.map((name, idx) => ({
+    const names = isBs ? MONTH_NAMES_EN : AD_MONTHS
+    const maxMonth = Number(selectedYear) === currentYear ? currentMonth : 12
+    return names
+      .map((name, idx) => ({
         value: idx + 1,
         label: name,
       }))
+      .filter((opt) => opt.value <= maxMonth)
+  }, [isBs, selectedYear, currentYear, currentMonth])
+
+  // Clamp selected year and month if they exceed current year/month
+  useEffect(() => {
+    if (Number(selectedYear) > currentYear) {
+      setSelectedYear(currentYear)
+    } else if (Number(selectedYear) === currentYear && Number(selectedMonth) > currentMonth) {
+      setSelectedMonth(currentMonth)
     }
-    return AD_MONTHS.map((name, idx) => ({
-      value: idx + 1,
-      label: name,
-    }))
-  }, [isBs])
+  }, [selectedYear, selectedMonth, currentYear, currentMonth])
 
   // Compute active date range (always monthly)
   const range = useMemo(() => {
     const year = Number(selectedYear)
     const month = Number(selectedMonth)
 
+    const isCurrent = isBs
+      ? year === Number(todayBs?.year) && month === Number(todayBs?.month)
+      : year === today.getFullYear() && month === today.getMonth() + 1
+
     if (isBs) {
       const fromIso = bsToAdIso(year, month, 1)
       const days = getDaysInBsMonth(year, month)
-      const toIso = bsToAdIso(year, month, days)
+      const fullToIso = bsToAdIso(year, month, days)
+      const toIso = isCurrent ? iso(today) : fullToIso
       return {
         from: fromIso,
         to: toIso,
+        fullTo: fullToIso,
+        isCurrent,
         label: `${MONTH_NAMES_EN[month - 1] || 'Month'} ${year} BS`,
       }
     }
 
     const fromIso = `${year}-${pad(month)}-01`
     const daysInMonth = new Date(year, month, 0).getDate()
-    const toIso = `${year}-${pad(month)}-${pad(daysInMonth)}`
+    const fullToIso = `${year}-${pad(month)}-${pad(daysInMonth)}`
+    const toIso = isCurrent ? iso(today) : fullToIso
     return {
       from: fromIso,
       to: toIso,
+      fullTo: fullToIso,
+      isCurrent,
       label: `${AD_MONTHS[month - 1] || ''} ${year}`,
     }
-  }, [selectedYear, selectedMonth, isBs])
+  }, [selectedYear, selectedMonth, isBs, today, todayBs])
 
   // Auto-fetch summary data with debounce
   useEffect(() => {
@@ -152,7 +176,7 @@ export default function SummaryReport() {
       'Employee ID',
       'Employee',
       'Department',
-      'Working Days',
+      range.isCurrent ? 'Working Days (Up to Today)' : 'Working Days',
       'Present Days',
       'Absent Days',
       'Total Hours',
@@ -191,10 +215,14 @@ export default function SummaryReport() {
     doc.setTextColor(15, 23, 42)
     doc.text('Attendance Summary Report', 14, 13)
 
+    const workingDaysLabel = range.isCurrent
+      ? `Working Days (Up to Today): ${data.workingDays}`
+      : `Total Working Days: ${data.workingDays}`
+
     doc.setFontSize(8.5)
     doc.setTextColor(100, 116, 139)
     doc.text(
-      `Period: ${range.label} (${range.from} to ${range.to})  |  Total Working Days: ${data.workingDays}  |  Generated: ${new Date().toLocaleDateString()}`,
+      `Period: ${range.label} (${range.from} to ${range.to})  |  ${workingDaysLabel}  |  Generated: ${new Date().toLocaleDateString()}`,
       14,
       18,
     )
@@ -204,7 +232,7 @@ export default function SummaryReport() {
         'Employee ID',
         'Employee',
         'Department',
-        'Working Days',
+        range.isCurrent ? 'Working Days (Up to Today)' : 'Working Days',
         'Present',
         'Absent',
         'Total Hours',
@@ -255,8 +283,8 @@ export default function SummaryReport() {
 
   const subtitle = data
     ? isBs
-      ? `${data.fromBs} to ${data.toBs} BS · ${data.workingDays} working days · ${data.employeeCount} employees`
-      : `${range.from} to ${range.to} AD · ${data.workingDays} working days · ${data.employeeCount} employees`
+      ? `${data.fromBs} to ${data.toBs} BS · ${data.workingDays} working days${range.isCurrent ? ' (up to today)' : ''} · ${data.employeeCount} employees`
+      : `${range.from} to ${range.to} AD · ${data.workingDays} working days${range.isCurrent ? ' (up to today)' : ''} · ${data.employeeCount} employees`
     : undefined
 
   return (
@@ -393,7 +421,9 @@ export default function SummaryReport() {
       {data && !loading && (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Card className="p-3.5">
-            <div className="text-xs font-medium text-slate-500">Total Working Days</div>
+            <div className="text-xs font-medium text-slate-500">
+              {range.isCurrent ? 'Working Days (Up to Today)' : 'Total Working Days'}
+            </div>
             <div className="mt-1 text-2xl font-bold text-slate-800">
               {data.workingDays}{' '}
               <span className="text-xs font-normal text-slate-500">days</span>
@@ -442,7 +472,12 @@ export default function SummaryReport() {
                   Department
                 </th>
                 <th className="px-3 py-3 text-center text-xs font-semibold text-slate-700 whitespace-nowrap">
-                  Working Days
+                  <div>Working Days</div>
+                  {range.isCurrent && (
+                    <div className="text-[10px] font-normal text-slate-400 leading-tight">
+                      (up to today)
+                    </div>
+                  )}
                 </th>
                 <th className="px-3 py-3 text-center text-xs font-semibold text-green-600 whitespace-nowrap">
                   Present

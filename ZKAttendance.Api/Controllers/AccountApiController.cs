@@ -41,7 +41,7 @@ namespace ZKAttendance.Api.Controllers
                 .FirstOrDefaultAsync(u => u.ApiUserId == id.Value);
             if (user is null) return NotFound(ApiError.From("Account not found"));
 
-            string? employeeName = null, departmentName = null;
+            string? employeeName = null, departmentName = null, photoUrl = null, title = null, employeeCode = null;
             if (user.EmployeeId.HasValue)
             {
                 var emp = await _context.Employees.AsNoTracking()
@@ -49,6 +49,9 @@ namespace ZKAttendance.Api.Controllers
                     .FirstOrDefaultAsync(e => e.EmployeeId == user.EmployeeId.Value);
                 employeeName = emp?.EmployeeName;
                 departmentName = emp?.Department?.DepartmentName;
+                photoUrl = emp?.PhotoUrl;
+                title = emp?.Title;
+                employeeCode = emp?.BiometricUserId;
             }
 
             return Ok(new
@@ -62,7 +65,10 @@ namespace ZKAttendance.Api.Controllers
                 user.LastLoginDate,
                 user.EmployeeId,
                 employeeName,
-                departmentName
+                departmentName,
+                photoUrl,
+                title,
+                employeeCode
             });
         }
 

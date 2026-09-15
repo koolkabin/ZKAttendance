@@ -1,4 +1,4 @@
-﻿using ZKAttendance.Domain.Entities;
+using ZKAttendance.Domain.Entities;
 
 namespace ZKAttendance.Application.Abstractions
 {
@@ -17,7 +17,6 @@ namespace ZKAttendance.Application.Abstractions
         Task<string> GetNextBiometricUserIdAsync();
         Task<List<string>> GetUnregisteredBiometricIdsAsync();
         Task<List<string>> GetLastBiometricUserIdsAsync(int count = 10);
-
-
+        Task<int> ReconcileAttendanceLogMappingsAsync(CancellationToken ct = default);
     }
 }

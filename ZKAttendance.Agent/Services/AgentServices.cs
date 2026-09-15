@@ -10,7 +10,7 @@ namespace ZKAttendance.Agent.Services
     public record CentralDevice(
         int DeviceId, string DeviceName, string DeviceIP, int DevicePort,
         int CommPassword, string? SerialNumber, string? DeviceModel,
-        string? Role, bool IsOnline, DateTime? LastConnectionTime);
+        string? Role, bool IsOnline, DateTime? LastConnectionTime, bool IsActive = true);
 
     public record DeviceListResponse(int LocalServerId, int DeviceCount, List<CentralDevice> Devices);
 
@@ -338,6 +338,8 @@ namespace ZKAttendance.Agent.Services
 
     public class DeviceSyncService : IDeviceSyncService
     {
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, SemaphoreSlim> _deviceLocks = new();
+
         private readonly AgentDbContext _db;
         private readonly ICentralClient _central;
         private readonly Func<IZkDeviceReader> _readerFactory;
@@ -364,6 +366,12 @@ namespace ZKAttendance.Agent.Services
             var device = list?.Devices.FirstOrDefault(d => d.DeviceId == deviceId);
             if (device is null)
                 return new DeviceTestResult(false, $"Device {deviceId} not found on central server.");
+
+            var sem = _deviceLocks.GetOrAdd(deviceId, _ => new SemaphoreSlim(1, 1));
+            if (!await sem.WaitAsync(TimeSpan.FromSeconds(2), ct))
+            {
+                return new DeviceTestResult(false, $"Device '{device.DeviceName}' is currently busy with another sync operation. Please retry in a moment.");
+            }
 
             using var reader = _readerFactory();
             try
@@ -397,6 +405,7 @@ namespace ZKAttendance.Agent.Services
             finally
             {
                 try { await reader.DisconnectAsync(); } catch { }
+                sem.Release();
             }
         }
 
@@ -426,6 +435,17 @@ namespace ZKAttendance.Agent.Services
                 run.Message = "The central server does not list this device for this agent. " +
                               "Check the device is active and assigned to this branch.";
                 await _db.SaveChangesAsync(ct);
+                return run;
+            }
+
+            var sem = _deviceLocks.GetOrAdd(deviceId, _ => new SemaphoreSlim(1, 1));
+            if (!await sem.WaitAsync(TimeSpan.FromSeconds(3), ct))
+            {
+                run.Status = "Failed";
+                run.FinishedAt = DateTime.Now;
+                run.Message = $"Device '{device.DeviceName}' is currently busy with another sync operation. Skipped to prevent socket collision.";
+                await _db.SaveChangesAsync(ct);
+                _logger.LogWarning("Device {DeviceId} ({DeviceName}) is currently busy. Sync operation skipped to prevent collision.", deviceId, device.DeviceName);
                 return run;
             }
 
@@ -511,6 +531,7 @@ namespace ZKAttendance.Agent.Services
             finally
             {
                 try { await reader.DisconnectAsync(); } catch { /* already closed */ }
+                sem.Release();
             }
         }
     }
@@ -549,13 +570,14 @@ namespace ZKAttendance.Agent.Services
 
             while (!stoppingToken.IsCancellationRequested)
             {
+                var hasMore = false;
                 try
                 {
                     using var scope = _scopes.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<AgentDbContext>();
                     var central = scope.ServiceProvider.GetRequiredService<ICentralClient>();
 
-                    await DrainOnceAsync(db, central, batchSize, stoppingToken);
+                    hasMore = await DrainOnceAsync(db, central, batchSize, stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -567,12 +589,16 @@ namespace ZKAttendance.Agent.Services
                     _logger.LogError(ex, "Outbox drain failed; retrying next cycle");
                 }
 
-                try { await Task.Delay(interval, stoppingToken); }
+                try
+                {
+                    var delay = hasMore ? TimeSpan.FromMilliseconds(150) : interval;
+                    await Task.Delay(delay, stoppingToken);
+                }
                 catch (OperationCanceledException) { break; }
             }
         }
 
-        internal async Task DrainOnceAsync(
+        internal async Task<bool> DrainOnceAsync(
             AgentDbContext db, ICentralClient central, int batchSize, CancellationToken ct)
         {
             var now = DateTime.Now;
@@ -584,7 +610,7 @@ namespace ZKAttendance.Agent.Services
                 .Take(batchSize)
                 .ToListAsync(ct);
 
-            if (batch.Count == 0) return;
+            if (batch.Count == 0) return false;
 
             var (ok, result, error, permanent) = await central.SendPunchesAsync(batch, ct);
 
@@ -602,7 +628,7 @@ namespace ZKAttendance.Agent.Services
                 _logger.LogInformation(
                     "Outbox: sent {Count} ({Accepted} new, {Dup} already there)",
                     batch.Count, result?.Accepted ?? 0, result?.Duplicates ?? 0);
-                return;
+                return batch.Count == batchSize;
             }
 
             foreach (var row in batch)
@@ -621,6 +647,7 @@ namespace ZKAttendance.Agent.Services
 
             _logger.LogWarning(
                 "Outbox: {Count} punch(es) not sent ({Error}). Retrying.", batch.Count, error);
+            return false;
         }
 
         /// <summary>2s, 4s, 8s... capped at 5 minutes.</summary>
@@ -656,6 +683,91 @@ namespace ZKAttendance.Agent.Services
                 }
 
                 try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Automatically connects to all registered branch terminals on a schedule
+    /// (e.g. every 20 minutes) and stages new attendance logs in the outbox.
+    /// </summary>
+    public class AutoDeviceSyncService : BackgroundService
+    {
+        private readonly IServiceScopeFactory _scopes;
+        private readonly IConfiguration _config;
+        private readonly ILogger<AutoDeviceSyncService> _logger;
+
+        public AutoDeviceSyncService(
+            IServiceScopeFactory scopes,
+            IConfiguration config,
+            ILogger<AutoDeviceSyncService> logger)
+        {
+            _scopes = scopes;
+            _config = config;
+            _logger = logger;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            var enabled = _config.GetValue("Sync:AutoSync", true);
+            var intervalMinutes = _config.GetValue("Sync:IntervalMinutes", 20);
+
+            if (!enabled)
+            {
+                _logger.LogInformation("Auto device sync is disabled in configuration.");
+                return;
+            }
+
+            _logger.LogInformation("Auto device sync active: will sync all branch terminals every {Minutes} minute(s).", intervalMinutes);
+
+            // Initial brief wait on startup to let CentralClient log in and database initialize
+            try { await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken); }
+            catch (OperationCanceledException) { return; }
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    using var scope = _scopes.CreateScope();
+                    var central = scope.ServiceProvider.GetRequiredService<ICentralClient>();
+                    var sync = scope.ServiceProvider.GetRequiredService<IDeviceSyncService>();
+
+                    var deviceList = await central.GetDevicesAsync(stoppingToken);
+                    if (deviceList?.Devices != null && deviceList.Devices.Count > 0)
+                    {
+                        var activeDevices = deviceList.Devices.Where(d => d.IsActive).ToList();
+                        _logger.LogInformation("AutoSync starting for {Count} active device(s)...", activeDevices.Count);
+
+                        foreach (var device in activeDevices)
+                        {
+                            if (stoppingToken.IsCancellationRequested) break;
+
+                            try
+                            {
+                                var run = await sync.SyncDeviceAsync(device.DeviceId, "AutoSync (20m)", null, null, stoppingToken);
+                                _logger.LogInformation("AutoSync for {Device}: status={Status}, read={Read}, queued={Queued}",
+                                    device.DeviceName, run.Status, run.RecordsRead, run.RecordsQueued);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "AutoSync failed for device {Device}", device.DeviceName);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogDebug("AutoSync: No devices registered or central unreachable.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error in AutoDeviceSyncService loop.");
+                }
+
+                // Re-read interval in case of config reload
+                intervalMinutes = _config.GetValue("Sync:IntervalMinutes", 20);
+                try { await Task.Delay(TimeSpan.FromMinutes(Math.Max(1, intervalMinutes)), stoppingToken); }
                 catch (OperationCanceledException) { break; }
             }
         }

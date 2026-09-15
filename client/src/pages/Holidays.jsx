@@ -26,6 +26,7 @@ const emptyForm = { date: '', holidayName: '', holidayType: 'Festival', descript
 export default function Holidays() {
   const fb = useFeedback()
   const { isBs, formatDate } = useCalendar()
+  const today = useMemo(() => todayIso(), [])
 
   const [view, setView] = useState(() => {
     const d = new Date()
@@ -35,9 +36,16 @@ export default function Holidays() {
 
   const [holidays, setHolidays] = useState([])
   const [error, setError] = useState('')
-  const [form, setForm] = useState(emptyForm)
+  const [form, setForm] = useState(() => ({ ...emptyForm, date: todayIso() }))
   const [editingExisting, setEditingExisting] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  function goToToday() {
+    const d = new Date()
+    const bs = adToBs(d)
+    setView(isBs ? { year: bs.year, month: bs.month } : { year: d.getFullYear(), month: d.getMonth() + 1 })
+    selectDay(today)
+  }
 
   // Re-base the month only when the user actually TOGGLES AD/BS.
   //
@@ -89,6 +97,21 @@ export default function Holidays() {
     for (const h of holidays) map[ymd(h.date)] = h
     return map
   }, [holidays])
+
+  // Sync form when holidays load or if date matches an existing holiday
+  useEffect(() => {
+    if (!form.date) return
+    const existing = holidayByDate[form.date]
+    if (existing && !editingExisting) {
+      setEditingExisting(true)
+      setForm((prev) => ({
+        ...prev,
+        holidayName: existing.holidayName,
+        holidayType: existing.holidayType || 'Festival',
+        description: existing.description || '',
+      }))
+    }
+  }, [holidayByDate, form.date, editingExisting])
 
   function selectDay(iso) {
     const existing = holidayByDate[iso]
@@ -142,16 +165,13 @@ export default function Holidays() {
       await api.removeOnDate(iso)
       fb.success('Holiday removed')
       if (form.date === iso) {
-        setForm(emptyForm)
-        setEditingExisting(false)
+        selectDay(today)
       }
       load()
     } catch (err) {
       fb.error(apiErrorMessage(err))
     }
   }
-
-  const today = todayIso()
 
   return (
     <div>
@@ -170,7 +190,7 @@ export default function Holidays() {
           <NepaliMonthCalendar
             view={view}
             onViewChange={setView}
-            selectedIso={form.date || undefined}
+            selectedIso={form.date || today}
             onDayClick={(cell) => {
               if (cell.isSaturday) {
                 fb.info('Saturday is already the fixed weekly off — no holiday needed.')
@@ -202,6 +222,21 @@ export default function Holidays() {
               }
               return {}
             }}
+            footer={
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-sky-600"></span>
+                  <span>Today: <strong className="text-slate-800">{formatDate(today)}</strong></span>
+                </div>
+                <button
+                  type="button"
+                  onClick={goToToday}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-sky-700 shadow-sm hover:bg-sky-50 transition cursor-pointer"
+                >
+                  Jump to Today
+                </button>
+              </div>
+            }
           />
 
           {/* This month's list, scrollable */}
@@ -267,13 +302,28 @@ export default function Holidays() {
 
             <form onSubmit={save} className="mt-4 space-y-4">
               <Field
-                label={`Date (${isBs ? 'BS' : 'AD'})`}
+                label={
+                  <span className="flex items-center justify-between">
+                    <span>Date ({isBs ? 'BS' : 'AD'})</span>
+                    {form.date !== today && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          goToToday()
+                        }}
+                        className="text-xs font-semibold text-sky-600 hover:text-sky-700 hover:underline cursor-pointer"
+                      >
+                        Set to Today
+                      </button>
+                    )}
+                  </span>
+                }
                 required
-                
               >
                 <NepaliDatePicker
                   value={form.date}
-                  onChange={(date) => selectDay(date)}
+                  onChange={(date) => selectDay(date || today)}
                   disableFuture={false}
                   clearable
                   placeholder="Choose a date"
@@ -335,11 +385,10 @@ export default function Holidays() {
                     type="button"
                     variant="ghost"
                     onClick={() => {
-                      setForm(emptyForm)
-                      setEditingExisting(false)
+                      selectDay(today)
                     }}
                   >
-                    Clear
+                    Reset to Today
                   </Button>
                   <Button type="submit" disabled={saving || !form.date}>
                     {saving ? 'Saving…' : editingExisting ? 'Update' : 'Add holiday'}

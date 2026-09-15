@@ -337,6 +337,8 @@ namespace ZKAttendance.Api.Controllers
             var start = (from ?? new DateTime(today.Year, today.Month, 1)).Date;
             var end = (to ?? today).Date;
             if (end < start) (start, end) = (end, start);
+            if (end > today) end = today;
+            if (start > today) start = today;
             if ((end - start).TotalDays > 400)
                 return BadRequest(new { message = "Range too wide — one year maximum." });
 
@@ -350,6 +352,12 @@ namespace ZKAttendance.Api.Controllers
             var workingDays = new List<DateTime>();
             for (var d = start; d <= end; d = d.AddDays(1))
                 if (!_nepali.IsWeeklyOff(d) && !holidayDates.Contains(d)) workingDays.Add(d);
+
+            // If the range includes today and extends into the future (current month),
+            // calculate working days up to today so future days are not reported as worked/scheduled yet.
+            var isCurrentRange = start <= today && end > today;
+            var workingDaysUpToToday = workingDays.Count(d => d <= today);
+            var displayWorkingDays = isCurrentRange ? workingDaysUpToToday : workingDays.Count;
 
             var empQuery = _db.Employees.Include(e => e.Department).Where(e => e.IsActive);
             if (departmentId.HasValue) empQuery = empQuery.Where(e => e.DepartmentId == departmentId.Value);
@@ -403,13 +411,14 @@ namespace ZKAttendance.Api.Controllers
                         var closeMoment = closeTime.Add(TimeSpan.FromMinutes(closeGraceMinutes));
                         var hireDate = e.HireDate?.Date;
 
-                        // Working days that have finished AND fall after they joined.
-                        var elapsed = workingDays.Count(d =>
-                            (hireDate is null || d >= hireDate)
-                            && (d < today || (d == today && now.TimeOfDay >= closeMoment)));
-
                         var mine = perEmpDay.Where(x => x.EmployeeId == e.EmployeeId).ToList();
                         var present = mine.Count;
+
+                        // Working days that have finished AND fall after they joined.
+                        // If current month, cap at working days up to today.
+                        var elapsed = workingDays.Count(d =>
+                            (hireDate is null || d >= hireDate)
+                            && (d < today || (d == today && (now.TimeOfDay >= closeMoment || mine.Any(p => p.Day == today)))));
 
                         var dayHours = mine
                             .Where(x => x.Last is not null)
@@ -430,7 +439,7 @@ namespace ZKAttendance.Api.Controllers
                             presentDays = present,
                             absentDays = Math.Max(0, elapsed - present),
                             workingDaysElapsed = elapsed,
-                            workingDaysScheduled = workingDays.Count,
+                            workingDaysScheduled = isCurrentRange ? workingDaysUpToToday : workingDays.Count,
                             totalHours = Math.Round(dayHours.Sum(), 1),
                             avgHours = dayHours.Count > 0 ? Math.Round(dayHours.Average(), 2) : 0.0,
                             earliestIn = Hm(ins.Count > 0 ? ins.Min() : null),
@@ -448,7 +457,10 @@ namespace ZKAttendance.Api.Controllers
                 toAd = end.ToString("yyyy-MM-dd"),
                 fromBs = _nepali.ToBsString(start),
                 toBs = _nepali.ToBsString(end),
-                workingDays = workingDays.Count,
+                workingDays = displayWorkingDays,
+                workingDaysTotal = workingDays.Count,
+                workingDaysUpToToday = workingDaysUpToToday,
+                isCurrentMonth = isCurrentRange,
                 employeeCount = employees.Count,
                 departments = deptGroups
             });

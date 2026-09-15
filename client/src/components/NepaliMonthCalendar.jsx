@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useCalendar } from '../context/CalendarContext'
 import {
   buildMonthGrid,
   shiftMonth,
   toNepaliDigits,
+  adToBs,
   MONTH_NAMES_EN,
   MONTH_NAMES_NP,
   AD_MONTH_NAMES_EN,
@@ -30,6 +31,7 @@ import {
  *   selectedIso                  AD ISO string of the selected day
  *   maxIso / minIso              AD ISO bounds; days outside are disabled
  *   compact                      smaller cells, for the date-picker popover
+ *   disableFuture                disallow viewing / advancing into future months
  */
 export default function NepaliMonthCalendar({
   view,
@@ -40,9 +42,32 @@ export default function NepaliMonthCalendar({
   maxIso,
   minIso,
   compact = false,
+  disableFuture = false,
   footer,
 }) {
   const { isBs } = useCalendar()
+
+  const currentView = useMemo(() => {
+    const d = new Date()
+    if (isBs) {
+      const bs = adToBs(d)
+      return { year: bs?.year || 2083, month: bs?.month || 5 }
+    }
+    return { year: d.getFullYear(), month: d.getMonth() + 1 }
+  }, [isBs])
+
+  const isAtOrPastCurrent = disableFuture && (
+    view.year > currentView.year || (view.year === currentView.year && view.month >= currentView.month)
+  )
+
+  useEffect(() => {
+    if (!disableFuture) return
+    if (view.year > currentView.year) {
+      onViewChange({ ...view, year: currentView.year, month: currentView.month })
+    } else if (view.year === currentView.year && view.month > currentView.month) {
+      onViewChange({ ...view, month: currentView.month })
+    }
+  }, [disableFuture, view, currentView, onViewChange])
 
   const grid = useMemo(
     () => buildMonthGrid(isBs ? 'BS' : 'AD', view.year, view.month),
@@ -58,18 +83,23 @@ export default function NepaliMonthCalendar({
   const years = useMemo(() => {
     const list = []
     if (isBs) {
-      for (let y = MIN_BS_YEAR; y <= MAX_BS_YEAR; y++) list.push(y)
+      const maxYear = disableFuture ? currentView.year : MAX_BS_YEAR
+      for (let y = MIN_BS_YEAR; y <= maxYear; y++) list.push(y)
     } else {
       const now = new Date().getFullYear()
-      for (let y = now - 10; y <= now + 10; y++) list.push(y)
+      const maxYear = disableFuture ? now : now + 10
+      for (let y = now - 10; y <= maxYear; y++) list.push(y)
     }
     return list
-  }, [isBs])
+  }, [isBs, disableFuture, currentView.year])
 
   const monthNames = isBs ? MONTH_NAMES_EN : AD_MONTH_NAMES_EN
   const weekdayNames = isBs ? DAY_SHORT_NP : DAY_SHORT_EN
 
-  const step = (delta) => onViewChange(shiftMonth(isBs ? 'BS' : 'AD', view.year, view.month, delta))
+  const step = (delta) => {
+    if (delta > 0 && isAtOrPastCurrent) return
+    onViewChange(shiftMonth(isBs ? 'BS' : 'AD', view.year, view.month, delta))
+  }
 
   const cellHeight = compact ? 'h-10' : 'h-20 sm:h-24'
 
@@ -80,7 +110,7 @@ export default function NepaliMonthCalendar({
         <button
           type="button"
           onClick={() => step(-1)}
-          className="rounded-lg p-1.5 text-slate-300 transition hover:bg-white/10 hover:text-white"
+          className="rounded-lg p-1.5 text-slate-300 transition hover:bg-white/10 hover:text-white cursor-pointer"
           aria-label="Previous month"
         >
           <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -99,17 +129,37 @@ export default function NepaliMonthCalendar({
 
         <div className="flex items-center gap-1.5">
           {!compact && (
+            <button
+              type="button"
+              onClick={() => {
+                onViewChange(currentView)
+                const d = new Date()
+                onDayClick?.({ adIso: todayIso, isSaturday: d.getDay() === 6 })
+              }}
+              className="inline-flex items-center rounded border border-white/20 bg-white/10 px-2 py-0.5 text-xs font-semibold text-white hover:bg-white/20 transition cursor-pointer"
+              title="Jump to Today"
+            >
+              Today
+            </button>
+          )}
+          {!compact && (
             <div className="hidden items-center gap-1.5 sm:flex">
               <select
                 value={view.month}
                 onChange={(e) => onViewChange({ ...view, month: Number(e.target.value) })}
                 className="rounded border border-white/15 bg-white/10 px-1.5 py-0.5 text-xs font-medium text-white outline-none"
               >
-                {monthNames.map((name, i) => (
-                  <option key={name} value={i + 1} className="text-slate-800">
-                    {isBs ? `${MONTH_NAMES_NP[i]} · ${name}` : name}
-                  </option>
-                ))}
+                {monthNames.map((name, i) => {
+                  const m = i + 1
+                  if (disableFuture && view.year === currentView.year && m > currentView.month) {
+                    return null
+                  }
+                  return (
+                    <option key={name} value={m} className="text-slate-800">
+                      {isBs ? `${MONTH_NAMES_NP[i]} · ${name}` : name}
+                    </option>
+                  )
+                })}
               </select>
               <select
                 value={view.year}
@@ -127,7 +177,12 @@ export default function NepaliMonthCalendar({
           <button
             type="button"
             onClick={() => step(1)}
-            className="rounded-lg p-1.5 text-slate-300 transition hover:bg-white/10 hover:text-white"
+            disabled={isAtOrPastCurrent}
+            className={`rounded-lg p-1.5 transition ${
+              isAtOrPastCurrent
+                ? 'opacity-30 cursor-not-allowed text-slate-500'
+                : 'text-slate-300 hover:bg-white/10 hover:text-white cursor-pointer'
+            }`}
             aria-label="Next month"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">

@@ -121,6 +121,8 @@ export const attendance = {
   log: (params) => get('/Attendance/log', params),
   logFilters: () => get('/Attendance/log/filters'),
   my: (params) => get('/Attendance/my', params),
+  mySummary: () => get('/Attendance/my-summary'),
+  holidaysUpcoming: (days = 90) => get('/Attendance/holidays/upcoming', { days }),
   manual: (b) => post('/Attendance/manual', b),
   punches: (params) => get('/Attendance/punches', params),
   deletePunch: (logId) => del(`/Attendance/punches/${logId}`),
@@ -172,3 +174,17 @@ export const users = {
 export const dashboard = {
   summary: () => get('/Dashboard/summary'),
 }
+
+// ── Leave Requests ───────────────────────────────────────────
+export const leaveRequests = {
+  list: (params) => get('/LeaveRequests', params),
+  getById: (id) => get(`/LeaveRequests/${id}`),
+  create: (b) => post('/LeaveRequests', b),
+  update: (id, b) => put(`/LeaveRequests/${id}`, b),
+  submit: (id) => post(`/LeaveRequests/${id}/submit`),
+  delete: (id) => del(`/LeaveRequests/${id}`),
+  approve: (id, remarks) => post(`/LeaveRequests/${id}/approve`, { remarks }),
+  reject: (id, remarks) => post(`/LeaveRequests/${id}/reject`, { remarks }),
+  summary: (params) => get('/LeaveRequests/summary', params),
+}
+

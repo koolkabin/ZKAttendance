@@ -16,6 +16,7 @@ import {
   HiOutlineCog6Tooth,
   HiOutlineExclamationTriangle,
   HiOutlineUserCircle,
+  HiOutlineCalendarDateRange,
 } from 'react-icons/hi2'
 import { useAuth } from '../context/AuthContext'
 import NotificationBell from './NotificationBell'
@@ -46,7 +47,8 @@ export default function Layout() {
               <SectionHeader title="Attendance & Time" />
               <div className="space-y-0.5">
                 <NavItem to="/attendance" label="Attendance" icon={HiOutlineClock} />
-                <NavItem to="/attendance/approvals" label="Approvals" icon={HiOutlineCheckBadge} />
+                <NavItem to="/attendance/approvals" label="Late Approvals" icon={HiOutlineCheckBadge} />
+                <NavItem to="/leave-requests" label="Leave Approvals" icon={HiOutlineCalendarDateRange} />
                 <NavItem to="/holidays" label="Holidays" icon={HiOutlineCalendarDays} />
               </div>
             </div>
@@ -85,7 +87,10 @@ export default function Layout() {
           <div>
             <SectionHeader title="Personal" />
             <div className="space-y-0.5">
+              <NavItem to="/" label="Dashboard" icon={HiOutlineSquares2X2} end />
               <NavItem to="/my-attendance" label="My Attendance" icon={HiOutlineClock} />
+              <NavItem to="/leave-requests" label="Request Leave" icon={HiOutlineCalendarDateRange} />
+              <NavItem to="/my-holidays" label="Holidays" icon={HiOutlineCalendarDays} />
             </div>
           </div>
         )}

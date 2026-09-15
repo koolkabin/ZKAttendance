@@ -133,6 +133,7 @@ export default function EmployeeCalendarModal({ employeeId, employeeName, onClos
       <NepaliMonthCalendar
         view={view}
         onViewChange={setView}
+        disableFuture={true}
         onDayClick={(cell) => {
           const c = cellByIso[cell.adIso]
           const status = normaliseStatus(c?.status)
