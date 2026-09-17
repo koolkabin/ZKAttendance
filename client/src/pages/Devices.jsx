@@ -8,9 +8,20 @@ import { useFeedback } from '../components/feedback'
 import { FaEdit } from 'react-icons/fa'
 import { FiWifi, FiRefreshCw, FiPower, FiUsers } from 'react-icons/fi'
 
+const DEVICE_TYPES = [
+  { value: 'ZkTeco',    label: 'ZKTeco (TCP port 4370)' },
+  { value: 'Hikvision', label: 'Hikvision (ISAPI HTTP)' },
+  { value: 'Dahua',     label: 'Dahua (HTTP/TCP SDK)' },
+  { value: 'Anviz',     label: 'Anviz (TCP binary)' },
+  { value: 'eSSL',      label: 'eSSL (HTTP API)' },
+  { value: 'HttpPush',  label: 'Generic HTTP Push' },
+  { value: 'Fake',      label: 'Fake (demo / no hardware)' },
+]
+
 const empty = {
   deviceName: '', deviceIP: '', devicePort: 4370, serialNumber: '',
-  deviceModel: '', branchId: '', role: 'Slave', commPassword: 0, isActive: true,
+  deviceModel: '', branchId: '', role: 'Slave', commPassword: 0,
+  deviceType: 'ZkTeco', isActive: true,
 }
 
 export default function Devices() {
@@ -36,7 +47,7 @@ export default function Devices() {
       deviceName: d.deviceName || '', deviceIP: d.deviceIP || '', devicePort: d.devicePort ?? 4370,
       serialNumber: d.serialNumber || '', deviceModel: d.deviceModel || '',
       branchId: d.branchId ? String(d.branchId) : '', role: d.role || 'Slave',
-      commPassword: d.commPassword ?? 0, isActive: d.isActive,
+      commPassword: d.commPassword ?? 0, deviceType: d.deviceType || 'ZkTeco', isActive: d.isActive,
     })
     setFormError(''); setEditing(d)
   }
@@ -128,6 +139,7 @@ export default function Devices() {
     ...(isAdmin ? [{ key: 'deviceIP', header: 'Address', render: (r) => `${r.deviceIP}:${r.devicePort}` }] : []),
     { key: 'branchId', header: 'Branch', render: (r) => branchName(r.branchId) },
     { key: 'role', header: 'Role', render: (r) => <Badge tone={r.role === 'Master' ? 'sky' : 'slate'}>{r.role}</Badge> },
+    { key: 'deviceType', header: 'Vendor', render: (r) => <Badge tone="violet">{r.deviceType || 'ZkTeco'}</Badge> },
     {
       key: 'provisioned',
       header: 'Users',
@@ -294,6 +306,11 @@ export default function Devices() {
                 </Select>
               </Field>
             </div>
+            <Field label="Vendor / Device Type" hint="Determines the communication protocol">
+              <Select {...nf('deviceType')}>
+                {DEVICE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </Select>
+            </Field>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
               Active

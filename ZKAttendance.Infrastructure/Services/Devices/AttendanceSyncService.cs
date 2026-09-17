@@ -47,7 +47,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
     public class AttendanceSyncService : IAttendanceSyncService
     {
         private readonly IServiceScopeFactory _scopeFactory;
-        private readonly Func<IZkDeviceReader> _readerFactory;
+        private readonly IDeviceReaderFactory _readerFactory;
         private readonly ILogger<AttendanceSyncService> _logger;
 
         /// <summary>
@@ -59,7 +59,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
 
         public AttendanceSyncService(
             IServiceScopeFactory scopeFactory,
-            Func<IZkDeviceReader> readerFactory,
+            IDeviceReaderFactory readerFactory,
             ILogger<AttendanceSyncService> logger)
         {
             _scopeFactory = scopeFactory;
@@ -120,7 +120,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
             try
             {
                 // ── 1. Connect ─────────────────────────────────────────────
-                using var reader = _readerFactory();
+                using var reader = _readerFactory.Create(device.DeviceType);
 
                 if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
                     throw new InvalidOperationException(

@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using ZKAttendance.Domain.Enums;
 
 namespace ZKAttendance.Domain.Entities
 {
@@ -31,6 +32,13 @@ namespace ZKAttendance.Domain.Entities
 
         [MaxLength(100)]
         public string? DeviceModel { get; set; }
+
+        /// <summary>
+        /// The vendor / communication protocol this terminal uses.
+        /// Determines which IZkDeviceReader implementation is instantiated when
+        /// syncing or enrolling. Defaults to ZkTeco so existing rows are unaffected.
+        /// </summary>
+        public DeviceType DeviceType { get; set; } = DeviceType.ZkTeco;
 
         /// <summary>
         /// The device Communication Password (Comm Key) set on the terminal

@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FaEdit } from 'react-icons/fa'
 import { RiDeleteBin5Line } from 'react-icons/ri'
-import { HiChevronUpDown } from 'react-icons/hi2'
+import {
+  HiChevronUpDown,
+  HiOutlineClock,
+} from 'react-icons/hi2'
 import { MdCalendarMonth } from 'react-icons/md'
 import { FiLogIn, FiEye, FiEyeOff, FiAlertTriangle, FiArrowRight } from 'react-icons/fi'
-import { employees as api, departments as deptApi, users as usersApi } from '../api/resources'
+import { employees as api, departments as deptApi, users as usersApi, shifts as shiftApi } from '../api/resources'
 import { apiErrorMessage } from '../lib/errors'
 import { useAuth } from '../context/AuthContext'
 import { useCalendar } from '../context/CalendarContext'
@@ -26,6 +29,7 @@ const emptyForm = {
   employeeName: '',
   biometricUserId: '',
   departmentId: '',
+  defaultShiftId: '',
   phoneNumber: '',
   title: '',
   email: '',
@@ -40,6 +44,7 @@ function toPayload(f) {
     employeeName: f.employeeName.trim(),
     biometricUserId: f.biometricUserId.trim() || null,
     departmentId: f.departmentId ? Number(f.departmentId) : null,
+    defaultShiftId: f.defaultShiftId ? Number(f.defaultShiftId) : null,
     phoneNumber: f.phoneNumber.trim() || null,
     title: f.title.trim() || null,
     email: f.email.trim() || null,
@@ -439,7 +444,7 @@ function MiniStat({ label, value, tone = 'slate' }) {
  * than a dense row, with the calendar as the primary action. Clicking anywhere
  * else on the card opens the same detail panel the table row does.
  */
-function EmployeeCardGrid({ rows, loading, deptName, onOpen, onCalendar, onEnroll }) {
+function EmployeeCardGrid({ rows, loading, deptName, shiftMap, onOpen, onCalendar, onEnroll }) {
   if (loading) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white py-16 text-center text-slate-400 shadow-sm">
@@ -470,7 +475,14 @@ function EmployeeCardGrid({ rows, loading, deptName, onOpen, onCalendar, onEnrol
             <div className="min-w-0 flex-1">
               <div className="truncate font-semibold text-slate-900">{r.employeeName}</div>
               <div className="truncate text-xs text-slate-500">{r.title || '—'}</div>
-              <div className="mt-1 truncate text-xs text-slate-400">{deptName(r.departmentId)}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-slate-400">{deptName(r.departmentId)}</span>
+                {r.defaultShiftId && shiftMap?.get(r.defaultShiftId) && (
+                  <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 ring-1 ring-sky-200">
+                    {shiftMap.get(r.defaultShiftId).shiftName}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -538,6 +550,7 @@ export default function Employees() {
 
   const [employees, setEmployees] = useState([])
   const [departments, setDepartments] = useState([])
+  const [workShifts, setWorkShifts] = useState([])
   const [unregistered, setUnregistered] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -565,18 +578,24 @@ export default function Employees() {
     return (id) => map.get(id) || '—'
   }, [departments])
 
+  const shiftMap = useMemo(() => {
+    return new Map(workShifts.map((s) => [s.shiftId, s]))
+  }, [workShifts])
+
   async function refresh() {
     setLoading(true)
     setError('')
     try {
-      const [emps, depts, unreg] = await Promise.all([
+      const [emps, depts, unreg, sfts] = await Promise.all([
         api.list(),
         deptApi.list(),
         api.unregistered(),
+        shiftApi.list().catch(() => []),
       ])
       setEmployees(emps)
       setDepartments(depts)
       setUnregistered(unreg)
+      setWorkShifts(sfts || [])
     } catch (err) {
       setError(apiErrorMessage(err))
     } finally {
@@ -600,6 +619,7 @@ export default function Employees() {
       employeeName: emp.employeeName || '',
       biometricUserId: emp.biometricUserId || '',
       departmentId: emp.departmentId ? String(emp.departmentId) : '',
+      defaultShiftId: emp.defaultShiftId ? String(emp.defaultShiftId) : '',
       phoneNumber: emp.phoneNumber || '',
       title: emp.title || '',
       email: emp.email || '',
@@ -806,6 +826,8 @@ export default function Employees() {
     )
   }
 
+
+
   return (
     <div>
       <PageHeader
@@ -884,6 +906,7 @@ export default function Employees() {
                 <SortableHeader label="Job Title" sortKey="title" sortState={sort} onSort={toggleSort} />
                 <SortableHeader label="Hire Date" sortKey="hireDate" sortState={sort} onSort={toggleSort} />
                 <SortableHeader label="Department" sortKey="dept" sortState={sort} onSort={toggleSort} />
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 whitespace-nowrap">Shift</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500">Status</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500">Login</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500">Actions</th>
@@ -892,14 +915,14 @@ export default function Employees() {
             <tbody className="divide-y divide-slate-100">
               {loading && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
                     Loading employees…
                   </td>
                 </tr>
               )}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
                     No employees found.
                   </td>
                 </tr>
@@ -946,6 +969,18 @@ export default function Employees() {
                   {/* Department */}
                   <td className="px-4 py-3 whitespace-nowrap text-slate-600">
                     {deptName(r.departmentId)}
+                  </td>
+
+                  {/* Work Shift */}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {r.defaultShiftId && shiftMap.get(r.defaultShiftId) ? (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700 ring-1 ring-sky-200/70">
+                        <HiOutlineClock className="h-3.5 w-3.5 text-sky-500 shrink-0" />
+                        <span>{shiftMap.get(r.defaultShiftId).shiftName}</span>
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">Default Hours</span>
+                    )}
                   </td>
 
                   {/* Employee Status */}
@@ -1059,11 +1094,14 @@ export default function Employees() {
           rows={rows}
           loading={loading}
           deptName={deptName}
+          shiftMap={shiftMap}
           onOpen={setDetail}
           onCalendar={setCalendarFor}
           onEnroll={(e) => setEnrollFor({ employeeId: e.employeeId, employeeName: e.employeeName })}
         />
       )}
+
+
 
       {/* ── Create / Edit Modal ── */}
       {editing && (
@@ -1122,6 +1160,22 @@ export default function Employees() {
                       {d.departmentName}
                     </option>
                   ))}
+                </Select>
+              </Field>
+
+              <Field label="Work Shift">
+                <Select
+                  value={form.defaultShiftId}
+                  onChange={(e) => setForm({ ...form, defaultShiftId: e.target.value })}
+                >
+                  <option value="">Default Company Hours</option>
+                  {workShifts
+                    .filter((s) => s.isActive || String(s.shiftId) === String(form.defaultShiftId))
+                    .map((s) => (
+                      <option key={s.shiftId} value={s.shiftId}>
+                        {s.shiftName} ({s.startTime} - {s.endTime})
+                      </option>
+                    ))}
                 </Select>
               </Field>
 

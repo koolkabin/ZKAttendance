@@ -53,3 +53,38 @@ public enum VerifyMode
     Face = 15,
     Other = 99
 }
+
+/// <summary>
+/// The vendor / protocol family used to communicate with a biometric terminal.
+/// Stored per-device so a single deployment can mix ZKTeco doors, Hikvision
+/// cameras, or any other brand that has an IZkDeviceReader implementation.
+///
+/// New vendors: add a value here and a matching case in DeviceReaderFactory.
+/// Existing devices default to ZkTeco (0) — no migration data loss.
+/// </summary>
+public enum DeviceType
+{
+    /// <summary>ZKTeco standalone TCP binary protocol (port 4370). Current default.</summary>
+    ZkTeco = 0,
+
+    /// <summary>Hikvision access control / ISAPI — communicates via HTTP REST.</summary>
+    Hikvision = 1,
+
+    /// <summary>Dahua access control — HTTP/TCP SDK.</summary>
+    Dahua = 2,
+
+    /// <summary>Anviz devices — proprietary TCP binary protocol.</summary>
+    Anviz = 3,
+
+    /// <summary>eSSL devices — HTTP API or SDK.</summary>
+    eSSL = 4,
+
+    /// <summary>
+    /// Generic HTTP push — the device posts punches to the agent's
+    /// /api/push endpoint. No outbound connection needed.
+    /// </summary>
+    HttpPush = 10,
+
+    /// <summary>In-memory stub for development and demonstration.</summary>
+    Fake = 99
+}

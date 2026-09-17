@@ -24,12 +24,12 @@ namespace ZKAttendance.Infrastructure.Services.Devices
     public class DeviceEnrollmentOrchestrator : IDeviceEnrollmentOrchestrator
     {
         private readonly AttendanceDbContext _db;
-        private readonly Func<IZkDeviceReader> _readerFactory;
+        private readonly IDeviceReaderFactory _readerFactory;
         private readonly ILogger<DeviceEnrollmentOrchestrator> _logger;
 
         public DeviceEnrollmentOrchestrator(
             AttendanceDbContext db,
-            Func<IZkDeviceReader> readerFactory,
+            IDeviceReaderFactory readerFactory,
             ILogger<DeviceEnrollmentOrchestrator> logger)
         {
             _db = db;
@@ -62,7 +62,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
         private async Task<DeviceEnrollmentState> ProbeAsync(
             Device device, string enrolNumber, CancellationToken ct)
         {
-            using var reader = _readerFactory();
+            using var reader = _readerFactory.Create(device.DeviceType);
             try
             {
                 if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
@@ -77,33 +77,41 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                 // A firmware that will not do a bulk table read is a capability
                 // limit, not a connectivity problem, and must not be reported as
                 // "offline" - that sends people off checking network cables.
-                bool onDevice;
-                int templateCount;
+                bool onDevice = false;
+                int templateCount = 0;
                 string? note = null;
 
-                try
+                if (reader is IDeviceUserManager userManager)
                 {
-                    var users = await reader.GetUsersAsync();
-                    onDevice = users.Any(u => u.BiometricUserId == enrolNumber);
+                    try
+                    {
+                        var users = await userManager.GetUsersAsync();
+                        onDevice = users.Any(u => u.BiometricUserId == enrolNumber);
 
-                    var templates = onDevice
-                        ? await reader.GetTemplatesAsync(enrolNumber)
-                        : new List<FingerTemplate>();
-                    templateCount = templates.Count;
+                        var bioManager = reader as IDeviceBiometricManager;
+                        var templates = (onDevice && bioManager != null)
+                            ? await bioManager.GetTemplatesAsync(enrolNumber)
+                            : new List<FingerTemplate>();
+                        templateCount = templates.Count;
 
-                    note = !onDevice
-                        ? "Not on this terminal yet."
-                        : templateCount == 0
-                            ? "User created, no finger enrolled here yet."
-                            : null;
+                        note = !onDevice
+                            ? "Not on this terminal yet."
+                            : templateCount == 0
+                                ? "User created, no finger enrolled here yet."
+                                : null;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Connected to {Device} but could not read its user table", device.DeviceName);
+                        onDevice = false;
+                        templateCount = 0;
+                        note = "Connected, but this firmware will not list its users. Registration still works.";
+                    }
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.LogWarning(ex,
-                        "Connected to {Device} but could not read its user table", device.DeviceName);
-                    onDevice = false;
-                    templateCount = 0;
-                    note = "Connected, but this firmware will not list its users. Registration still works.";
+                    note = "This device type does not support remote user management.";
                 }
 
                 await reader.DisconnectAsync();
@@ -139,7 +147,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
             {
                 var enrolNumber = EnrolNumberFor(links, device.DeviceId, employee);
 
-                using var reader = _readerFactory();
+                using var reader = _readerFactory.Create(device.DeviceType);
                 try
                 {
                     if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
@@ -150,7 +158,17 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                         continue;
                     }
 
-                    var ok = await reader.SetUserAsync(enrolNumber, employee.EmployeeName);
+                    if (reader is not IDeviceUserManager userManager)
+                    {
+                        failed++;
+                        warnings.Add($"{device.DeviceName} does not support remote user provisioning.");
+                        states.Add(new DeviceEnrollmentState(
+                            device.DeviceId, device.DeviceName, device.Role.ToString(), device.IsActive,
+                            true, enrolNumber, false, 0, "Device does not support remote user provisioning."));
+                        continue;
+                    }
+
+                    var ok = await userManager.SetUserAsync(enrolNumber, employee.EmployeeName);
                     await reader.DisconnectAsync();
 
                     if (ok)
@@ -205,7 +223,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                     $"{employee.EmployeeName} has no biometric / enrol number, so there is nothing for the terminal to register against. Set one on the employee first.");
             }
 
-            using var reader = _readerFactory();
+            using var reader = _readerFactory.Create(device.DeviceType);
 
             try
             {
@@ -224,30 +242,39 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                 // cannot be listed, just write unconditionally instead of
                 // giving up. Listing is an optimisation, not a precondition.
                 var alreadyThere = false;
-                try
+                if (reader is IDeviceUserManager userManager)
                 {
-                    var users = await reader.GetUsersAsync();
-                    alreadyThere = users.Any(u => u.BiometricUserId == enrolNumber);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "Could not list users on {Device}; writing the user record anyway",
-                        device.DeviceName);
-                }
-
-                if (!alreadyThere)
-                {
-                    if (!await reader.SetUserAsync(enrolNumber, employee.EmployeeName))
+                    try
                     {
-                        return new StartEnrollmentResult(false, device.DeviceId, device.DeviceName, enrolNumber, fingerIndex,
-                            "The terminal would not accept the user record, so enrolment cannot start.");
+                        var users = await userManager.GetUsersAsync();
+                        alreadyThere = users.Any(u => u.BiometricUserId == enrolNumber);
                     }
-                    await EnsureLinkAsync(employeeId, device.DeviceId, enrolNumber, enrolled: false, ct);
-                    await _db.SaveChangesAsync(ct);
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Could not list users on {Device}; writing the user record anyway",
+                            device.DeviceName);
+                    }
+
+                    if (!alreadyThere)
+                    {
+                        if (!await userManager.SetUserAsync(enrolNumber, employee.EmployeeName))
+                        {
+                            return new StartEnrollmentResult(false, device.DeviceId, device.DeviceName, enrolNumber, fingerIndex,
+                                "The terminal would not accept the user record, so enrolment cannot start.");
+                        }
+                        await EnsureLinkAsync(employeeId, device.DeviceId, enrolNumber, enrolled: false, ct);
+                        await _db.SaveChangesAsync(ct);
+                    }
                 }
 
-                var result = await reader.StartRemoteEnrollAsync(enrolNumber, fingerIndex);
+                if (reader is not IDeviceBiometricManager bioManager)
+                {
+                    return new StartEnrollmentResult(false, device.DeviceId, device.DeviceName, enrolNumber, fingerIndex,
+                        $"{device.DeviceName} ({device.DeviceType}) does not support remote enrollment triggering. Please enroll directly on the device.");
+                }
+
+                var result = await bioManager.StartRemoteEnrollAsync(enrolNumber, fingerIndex);
 
                 return new StartEnrollmentResult(
                     result.Started, device.DeviceId, device.DeviceName, enrolNumber, fingerIndex,
@@ -275,12 +302,14 @@ namespace ZKAttendance.Infrastructure.Services.Devices
             int employeeId, int? deviceId = null, CancellationToken ct = default)
         {
             var device = await ResolveEnrolmentDeviceAsync(deviceId, ct);
-            using var reader = _readerFactory();
+            using var reader = _readerFactory.Create(device.DeviceType);
             try
             {
                 if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
                     return false;
-                return await reader.CancelCaptureAsync();
+                if (reader is IDeviceBiometricManager bioManager)
+                    return await bioManager.CancelCaptureAsync();
+                return true;
             }
             catch (Exception ex)
             {
@@ -312,7 +341,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
             var masterEnrolNumber = EnrolNumberFor(links, master.DeviceId, employee);
             var pulled = new List<FingerTemplate>();
 
-            using (var reader = _readerFactory())
+            using (var reader = _readerFactory.Create(master.DeviceType))
             {
                 try
                 {
@@ -320,7 +349,11 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                         throw new InvalidOperationException(
                             $"Could not reach the master terminal {master.DeviceName} at {master.DeviceIP}:{master.DevicePort}.");
 
-                    pulled = await reader.GetTemplatesAsync(masterEnrolNumber);
+                    if (reader is not IDeviceBiometricManager bioMaster)
+                        throw new InvalidOperationException(
+                            $"The master terminal {master.DeviceName} ({master.DeviceType}) does not support template retrieval.");
+
+                    pulled = await bioMaster.GetTemplatesAsync(masterEnrolNumber);
                 }
                 catch (InvalidOperationException)
                 {
@@ -386,7 +419,7 @@ namespace ZKAttendance.Infrastructure.Services.Devices
             List<string> warnings,
             CancellationToken ct)
         {
-            using var reader = _readerFactory();
+            using var reader = _readerFactory.Create(device.DeviceType);
             try
             {
                 if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
@@ -395,7 +428,16 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                     return (Unreachable(device, enrolNumber), false);
                 }
 
-                if (!await reader.SetUserAsync(enrolNumber, employee.EmployeeName))
+                if (reader is not IDeviceUserManager userManager)
+                {
+                    warnings.Add($"{device.DeviceName} does not support user provisioning.");
+                    await reader.DisconnectAsync();
+                    return (new DeviceEnrollmentState(
+                        device.DeviceId, device.DeviceName, device.Role.ToString(), device.IsActive,
+                        true, enrolNumber, false, 0, "Device does not support remote user provisioning."), false);
+                }
+
+                if (!await userManager.SetUserAsync(enrolNumber, employee.EmployeeName))
                 {
                     warnings.Add($"{device.DeviceName} rejected the user record.");
                     await reader.DisconnectAsync();
@@ -407,11 +449,14 @@ namespace ZKAttendance.Infrastructure.Services.Devices
                 await EnsureLinkAsync(employee.EmployeeId, device.DeviceId, enrolNumber, enrolled: false, ct);
 
                 var written = 0;
-                foreach (var t in templates)
+                if (reader is IDeviceBiometricManager bioManager)
                 {
-                    var ok = await reader.SetTemplateAsync(new FingerTemplate(
-                        enrolNumber, t.FingerIndex, t.TemplateData, t.TemplateFormatVersion));
-                    if (ok) written++;
+                    foreach (var t in templates)
+                    {
+                        var ok = await bioManager.SetTemplateAsync(new FingerTemplate(
+                            enrolNumber, t.FingerIndex, t.TemplateData, t.TemplateFormatVersion));
+                        if (ok) written++;
+                    }
                 }
 
                 await reader.DisconnectAsync();

@@ -165,6 +165,13 @@ namespace ZKAttendance.Application.Dtos.Api
         /// </summary>
         public string Role { get; set; } = "Slave";
 
+        /// <summary>
+        /// Vendor / protocol family. Accepted values match the DeviceType enum:
+        /// "ZkTeco" (default), "Hikvision", "Dahua", "Anviz", "eSSL", "HttpPush", "Fake".
+        /// Unknown values are rejected with 400.
+        /// </summary>
+        public string DeviceType { get; set; } = "ZkTeco";
+
         public bool IsActive { get; set; } = true;
     }
 

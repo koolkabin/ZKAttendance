@@ -155,6 +155,12 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
 
             if (firstScans.Count == 0) return 0;
 
+            var empIds = firstScans.Select(s => s.EmployeeId).Distinct().ToList();
+            var empShifts = await _db.Employees.AsNoTracking()
+                .Where(e => empIds.Contains(e.EmployeeId))
+                .Include(e => e.DefaultShift)
+                .ToDictionaryAsync(e => e.EmployeeId, e => e.DefaultShift, ct);
+
             var existing = await _db.AttendanceApprovals
                 .Where(a => a.AttendanceDate == day)
                 .ToListAsync(ct);
@@ -163,7 +169,22 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
 
             foreach (var scan in firstScans)
             {
-                var outcome = policy.Classify(scan.First.TimeOfDay);
+                var effectivePolicy = policy;
+                if (empShifts.TryGetValue(scan.EmployeeId, out var shift) && shift != null)
+                {
+                    effectivePolicy = new AttendancePolicy
+                    {
+                        OfficeStartTime = shift.StartTime,
+                        OfficeEndTime = shift.EndTime,
+                        GraceMinutes = shift.LateMinutes,
+                        ApprovalRequiredAfterMinutes = policy.ApprovalRequiredAfterMinutes,
+                        RequireApprovalForLate = policy.RequireApprovalForLate,
+                        CloseGraceMinutes = shift.EarlyMinutes > 0 ? shift.EarlyMinutes : policy.CloseGraceMinutes,
+                        HalfDayUnderHours = shift.MinHoursForFullDay > 0 ? shift.MinHoursForFullDay : policy.HalfDayUnderHours
+                    };
+                }
+
+                var outcome = effectivePolicy.Classify(scan.First.TimeOfDay);
                 var row = existing.FirstOrDefault(a => a.EmployeeId == scan.EmployeeId);
 
                 // Already decided by a person. Leave it alone: re-evaluating
@@ -184,7 +205,7 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
                         AttendanceDate = day,
                         Status = status,
                         FirstCheckIn = scan.First,
-                        MinutesLate = policy.MinutesLate(scan.First.TimeOfDay),
+                        MinutesLate = effectivePolicy.MinutesLate(scan.First.TimeOfDay),
                         CreatedDate = DateTime.Now
                     });
                     if (status == AttendanceApprovalStatus.Pending) created++;
@@ -197,7 +218,7 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
                         row.FirstCheckIn = scan.First;
 
                     row.Status = status;
-                    row.MinutesLate = policy.MinutesLate((row.FirstCheckIn ?? scan.First).TimeOfDay);
+                    row.MinutesLate = effectivePolicy.MinutesLate((row.FirstCheckIn ?? scan.First).TimeOfDay);
                 }
             }
 

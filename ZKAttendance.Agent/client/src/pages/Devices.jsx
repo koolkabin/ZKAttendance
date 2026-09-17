@@ -19,6 +19,7 @@ export default function Devices({ status }) {
 
   const [form, setForm] = useState({
     deviceName: '',
+    deviceType: 'ZkTeco',
     deviceIP: '',
     devicePort: 4370,
     commPassword: 0,
@@ -73,6 +74,7 @@ export default function Devices({ status }) {
     setEditingDevice(null)
     setForm({
       deviceName: '',
+      deviceType: 'ZkTeco',
       deviceIP: '',
       devicePort: 4370,
       commPassword: 0,
@@ -89,6 +91,7 @@ export default function Devices({ status }) {
     setEditingDevice(device)
     setForm({
       deviceName: device.deviceName || '',
+      deviceType: device.deviceType || 'ZkTeco',
       deviceIP: device.deviceIP || '',
       devicePort: device.devicePort || 4370,
       commPassword: device.commPassword || 0,
@@ -272,6 +275,7 @@ export default function Devices({ status }) {
               <thead className="bg-slate-50 text-left text-xs text-slate-500">
                 <tr>
                   <th className="px-4 py-2.5 font-medium">Device</th>
+                  <th className="px-4 py-2.5 font-medium">Type / Brand</th>
                   <th className="px-4 py-2.5 font-medium">Network Address</th>
                   <th className="px-4 py-2.5 font-medium">Model / Serial</th>
                   <th className="px-4 py-2.5 font-medium">Role</th>
@@ -291,6 +295,21 @@ export default function Devices({ status }) {
                         {d.isOnline && (
                           <span className="ml-2 inline-block h-2 w-2 rounded-full bg-emerald-500" title="Online" />
                         )}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            (d.deviceType || 'ZkTeco') === 'Hikvision'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : (d.deviceType || 'ZkTeco') === 'Dahua'
+                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                              : (d.deviceType || 'ZkTeco') === 'Fake'
+                              ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                              : 'bg-teal-50 text-teal-700 border border-teal-200'
+                          }`}
+                        >
+                          {d.deviceType || 'ZkTeco'}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-600 font-mono text-xs">
                         {d.deviceIP}:{d.devicePort}
@@ -384,16 +403,49 @@ export default function Devices({ status }) {
             )}
 
             <form onSubmit={handleSaveDevice} className="space-y-3 text-xs">
-              <div>
-                <label className="font-medium text-slate-700">Device Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Main Entrance Reader"
-                  className="input mt-1 w-full"
-                  value={form.deviceName}
-                  onChange={(e) => setForm({ ...form, deviceName: e.target.value })}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-medium text-slate-700">Device Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Main Entrance Reader"
+                    className="input mt-1 w-full"
+                    value={form.deviceName}
+                    onChange={(e) => setForm({ ...form, deviceName: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="font-medium text-slate-700">Device Brand / Type *</label>
+                  <select
+                    className="input mt-1 w-full font-medium"
+                    value={form.deviceType}
+                    onChange={(e) => {
+                      const type = e.target.value
+                      const defaultPort =
+                        type === 'Hikvision' ? 80 :
+                        type === 'Dahua' ? 37777 :
+                        type === 'Anviz' ? 5005 :
+                        4370
+                      setForm({
+                        ...form,
+                        deviceType: type,
+                        devicePort:
+                          form.devicePort === 4370 || form.devicePort === 80 || form.devicePort === 37777 || form.devicePort === 5005
+                            ? defaultPort
+                            : form.devicePort,
+                      })
+                    }}
+                  >
+                    <option value="ZkTeco">ZKTeco (TCP 4370)</option>
+                    <option value="Hikvision">Hikvision (ISAPI / HTTP)</option>
+                    <option value="Dahua">Dahua (TCP / HTTP)</option>
+                    <option value="Anviz">Anviz (TCP)</option>
+                    <option value="eSSL">eSSL (TCP / API)</option>
+                    <option value="HttpPush">HTTP Push / Webhook</option>
+                    <option value="Fake">Fake / Simulator (Test)</option>
+                  </select>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-3">

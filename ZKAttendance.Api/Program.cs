@@ -159,20 +159,37 @@ builder.Services.AddSingleton<INepaliDateService>(_ => new NepaliDateService(wee
 // ═══════════════════════════════════════════════════════
 var legacyFakeFlag = builder.Configuration
     .GetValue("SyncConfiguration:UseFakeDeviceReader", true);
-var deviceProtocol = builder.Configuration["SyncConfiguration:DeviceProtocol"]
-    ?? (legacyFakeFlag ? "Fake" : "Tcp");
+// DeviceProtocol is no longer a global setting. Each Device row now carries
+// its own DeviceType which DeviceReaderFactory uses to pick the right reader.
+// The legacy flag is preserved for backward-compatible config files but is not
+// used by the factory — set DeviceType = "Fake" on a Device row instead.
+_ = legacyFakeFlag; // suppress CS0219 — kept for documentation/compat only
 var deviceCommPassword = builder.Configuration
     .GetValue("SyncConfiguration:DeviceCommPassword", 0);
 var deviceTimeoutMs = builder.Configuration
     .GetValue("SyncConfiguration:DeviceTimeoutMs", 5000);
 
-builder.Services.AddTransient<Func<IZkDeviceReader>>(sp => () =>
-    deviceProtocol.Equals("Tcp", StringComparison.OrdinalIgnoreCase)
-        ? new ZkTcpDeviceReader(
-            sp.GetRequiredService<ILogger<ZkTcpDeviceReader>>(),
-            deviceCommPassword,
-            deviceTimeoutMs)
-        : new FakeDeviceReader(sp.GetRequiredService<ILogger<FakeDeviceReader>>()));
+// ── Device readers — one transient per vendor ──────────────────────────
+//
+// Each reader is registered as a transient concrete type so that
+// DeviceReaderFactory can resolve the correct one per device row.
+//
+// The legacy global DeviceProtocol / UseFakeDeviceReader setting is kept
+// for the FakeDeviceReader used in testing: the factory will return it
+// when a device row has DeviceType = "Fake".
+builder.Services.AddTransient<ZkTcpDeviceReader>(sp =>
+    new ZkTcpDeviceReader(
+        sp.GetRequiredService<ILogger<ZkTcpDeviceReader>>(),
+        deviceCommPassword,
+        deviceTimeoutMs));
+builder.Services.AddTransient<FakeDeviceReader>();
+builder.Services.AddTransient<HikvisionDeviceReader>();
+builder.Services.AddTransient<DahuaDeviceReader>();
+builder.Services.AddTransient<AnvizDeviceReader>();
+builder.Services.AddTransient<eSSLDeviceReader>();
+builder.Services.AddTransient<HttpPushDeviceReader>();
+
+builder.Services.AddSingleton<IDeviceReaderFactory, DeviceReaderFactory>();
 
 builder.Services.AddScoped<IAttendanceSyncService, AttendanceSyncService>();
 // Note: AttendanceSyncBackgroundService is superseded by Hangfire recurring job 'sync-attendance-devices'

@@ -55,25 +55,10 @@ namespace ZKAttendance.Application.Abstractions
     public record EnrollResult(bool Started, string Message, int FingerIndex);
 
     /// <summary>
-    /// Everything the application needs from a physical ZKTeco machine.
-    ///
-    /// WHY AN INTERFACE
-    /// ----------------
-    /// The vendor SDK (zkemkeeper.dll) is a 32-bit COM component. It only runs
-    /// on Windows, must be registered with regsvr32, and cannot be used from a
-    /// unit test or a CI build. Putting it behind this interface means the sync
-    /// and enrolment services can be exercised with a fake reader, and the rest
-    /// of the codebase never references a COM type.
-    ///
-    /// READ vs WRITE
-    /// -------------
-    /// The original interface was read-only, which is why a person added in
-    /// this application never appeared on the terminal. The write half below is
-    /// what closes that gap: create the user, ask the terminal to capture a
-    /// finger, pull the resulting template back, and push it to every other
-    /// terminal so all devices agree on who exists.
+    /// Core interface that every attendance terminal reader must implement:
+    /// connecting, fetching diagnostic info, synchronizing clock, and reading punch logs.
     /// </summary>
-    public interface IZkDeviceReader : IDisposable
+    public interface IAttendanceDeviceReader : IDisposable
     {
         /// <param name="commPassword">The device Comm Key. 0 = none.</param>
         Task<bool> ConnectAsync(string ip, int port, int commPassword = 0);
@@ -84,25 +69,23 @@ namespace ZKAttendance.Application.Abstractions
         /// <summary>Push server time to the device so branch clocks stay aligned.</summary>
         Task<bool> SetDeviceTimeAsync(DateTime serverTime);
 
+        /// <summary>
+        /// All attendance records currently in device memory.
+        /// </summary>
+        Task<List<DevicePunch>> GetAttendanceLogsAsync(DateTime? since = null);
+    }
+
+    /// <summary>
+    /// Optional capability interface for devices that support user queries,
+    /// creating user records on the machine, and deleting users.
+    /// </summary>
+    public interface IDeviceUserManager
+    {
         /// <summary>All users enrolled on this device.</summary>
         Task<List<DeviceUser>> GetUsersAsync();
 
         /// <summary>
-        /// All attendance records currently in device memory.
-        ///
-        /// Note: most ZKTeco models cannot filter by date — they hand you the
-        /// whole log. Filtering by <paramref name="since"/> happens in the
-        /// wrapper, and the unique index in SQL Server catches whatever slips
-        /// through. Do not rely on the device to give you only new records.
-        /// </summary>
-        Task<List<DevicePunch>> GetAttendanceLogsAsync(DateTime? since = null);
-
-        // ── write half ───────────────────────────────────────────────────
-
-        /// <summary>
-        /// Create or overwrite the user record on the terminal. This is the
-        /// step that makes the name show on the display and lets the enrol
-        /// number be captured against; it does NOT enrol a finger.
+        /// Create or overwrite the user record on the terminal.
         /// </summary>
         Task<bool> SetUserAsync(
             string biometricUserId,
@@ -115,13 +98,20 @@ namespace ZKAttendance.Application.Abstractions
         Task<bool> DeleteUserAsync(string biometricUserId);
 
         /// <summary>
+        /// Ask the terminal to reload its user table from flash.
+        /// </summary>
+        Task<bool> RefreshDataAsync();
+    }
+
+    /// <summary>
+    /// Optional capability interface for devices that support remote biometric enrollment
+    /// (triggering fingerprint sensor / face camera) and reading/writing biometric templates.
+    /// </summary>
+    public interface IDeviceBiometricManager
+    {
+        /// <summary>
         /// Put the terminal into enrolment mode for this user, so the screen
-        /// switches to "place your finger" / "look at the camera" and the
-        /// person standing there can register on the spot.
-        ///
-        /// The call returns as soon as the terminal accepts the command — it
-        /// does not block for the person to finish. Poll GetTemplatesAsync (or
-        /// let the propagation job do it) to find out whether they did.
+        /// switches to "place your finger" / "look at the camera".
         /// </summary>
         Task<EnrollResult> StartRemoteEnrollAsync(string biometricUserId, int fingerIndex = 0);
 
@@ -129,20 +119,19 @@ namespace ZKAttendance.Application.Abstractions
         Task<bool> CancelCaptureAsync();
 
         /// <summary>
-        /// Read enrolled templates back off the terminal, for one user or for
-        /// everybody. This is what lets a new terminal be provisioned without
-        /// calling every employee back to press their finger again.
+        /// Read enrolled templates back off the terminal.
         /// </summary>
         Task<List<FingerTemplate>> GetTemplatesAsync(string? biometricUserId = null);
 
         /// <summary>Write one cached template onto this terminal.</summary>
         Task<bool> SetTemplateAsync(FingerTemplate template);
+    }
 
-        /// <summary>
-        /// Ask the terminal to reload its user table from flash. Required after
-        /// user or template writes on most firmware, otherwise the change is
-        /// only visible after a reboot.
-        /// </summary>
-        Task<bool> RefreshDataAsync();
+    /// <summary>
+    /// Composite interface combining core attendance reading, user management, and biometric enrollment.
+    /// Retained for full backward compatibility.
+    /// </summary>
+    public interface IZkDeviceReader : IAttendanceDeviceReader, IDeviceUserManager, IDeviceBiometricManager
+    {
     }
 }

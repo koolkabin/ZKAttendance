@@ -188,3 +188,15 @@ export const leaveRequests = {
   summary: (params) => get('/LeaveRequests/summary', params),
 }
 
+// ── Work Shifts ──────────────────────────────────────────────
+export const shifts = {
+  list: (params) => get('/WorkShifts', params),
+  get: (id) => get(`/WorkShifts/${id}`),
+  create: (b) => post('/WorkShifts', b),
+  update: (id, b) => put(`/WorkShifts/${id}`, b),
+  remove: (id) => del(`/WorkShifts/${id}`),
+  assign: (b) => post('/WorkShifts/assign', b),
+  unassign: (b) => post('/WorkShifts/unassign', b),
+}
+
+

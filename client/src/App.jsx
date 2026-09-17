@@ -23,6 +23,7 @@ import UnregisteredIds from './pages/UnregisteredIds'
 import UserDashboard from './pages/UserDashboard'
 import MyHolidays from './pages/MyHolidays'
 import LeaveRequests from './pages/LeaveRequests'
+import WorkShifts from './pages/WorkShifts'
 
 const MGMT = ['Admin', 'HR']
 
@@ -51,6 +52,7 @@ export default function App() {
 
         {/* Attendance & Approvals */}
         <Route path="attendance" element={<Manager><Attendance /></Manager>} />
+        <Route path="shifts" element={<Manager><WorkShifts /></Manager>} />
         <Route path="attendance/approvals" element={<Manager><AttendanceApprovals /></Manager>} />
         <Route path="holidays" element={<Manager><Holidays /></Manager>} />
 

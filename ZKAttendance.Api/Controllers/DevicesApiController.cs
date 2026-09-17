@@ -79,6 +79,11 @@ namespace ZKAttendance.Api.Controllers
                 return BadRequest(ApiError.From(
                     $"Role must be 'Master' or 'Slave'; got '{request.Role}'"));
 
+            if (!Enum.TryParse<ZKAttendance.Domain.Enums.DeviceType>(request.DeviceType, true, out var deviceType))
+                return BadRequest(ApiError.From(
+                    $"DeviceType '{request.DeviceType}' is not recognised. " +
+                    "Valid values: ZkTeco, Hikvision, Dahua, Anviz, eSSL, HttpPush, Fake."));
+
             try
             {
                 var created = await _devices.CreateDeviceAsync(new Device
@@ -91,6 +96,7 @@ namespace ZKAttendance.Api.Controllers
                     CommPassword = request.CommPassword,
                     BranchId = request.BranchId,
                     Role = role,
+                    DeviceType = deviceType,
                     IsActive = request.IsActive,
                     CreatedDate = DateTime.Now
                 });
@@ -119,6 +125,11 @@ namespace ZKAttendance.Api.Controllers
             if (!Enum.TryParse<DeviceRole>(request.Role, true, out var role))
                 return BadRequest(ApiError.From($"Role must be 'Master' or 'Slave'; got '{request.Role}'"));
 
+            if (!Enum.TryParse<ZKAttendance.Domain.Enums.DeviceType>(request.DeviceType, true, out var deviceType))
+                return BadRequest(ApiError.From(
+                    $"DeviceType '{request.DeviceType}' is not recognised. " +
+                    "Valid values: ZkTeco, Hikvision, Dahua, Anviz, eSSL, HttpPush, Fake."));
+
             existing.DeviceName = request.DeviceName;
             existing.DeviceIP = request.DeviceIP;
             existing.DevicePort = request.DevicePort;
@@ -127,6 +138,7 @@ namespace ZKAttendance.Api.Controllers
             existing.CommPassword = request.CommPassword;
             existing.BranchId = request.BranchId;
             existing.Role = role;
+            existing.DeviceType = deviceType;
             existing.IsActive = request.IsActive;
             existing.ModifiedDate = DateTime.Now;
 
@@ -235,6 +247,7 @@ namespace ZKAttendance.Api.Controllers
             commPassword = IsAdmin ? d.CommPassword : (int?)null,
             d.BranchId,
             role = d.Role.ToString(),
+            deviceType = d.DeviceType.ToString(),
             d.IsActive,
             d.IsOnline,
             d.IsProvisioned,

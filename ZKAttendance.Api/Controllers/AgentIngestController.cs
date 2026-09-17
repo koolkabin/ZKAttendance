@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ZKAttendance.Domain.Entities;
+using DeviceType = ZKAttendance.Domain.Enums.DeviceType;
 using ZKAttendance.Infrastructure.Persistence;
 
 namespace ZKAttendance.Api.Controllers
@@ -124,6 +125,7 @@ namespace ZKAttendance.Api.Controllers
                     d.SerialNumber,
                     d.DeviceModel,
                     role               = d.Role.ToString(),
+                    deviceType         = d.DeviceType.ToString(),
                     d.IsOnline,
                     d.LastConnectionTime
                 })
@@ -154,9 +156,13 @@ namespace ZKAttendance.Api.Controllers
             if (!Enum.TryParse<DeviceRole>(body.Role ?? "Slave", true, out var role))
                 role = DeviceRole.Slave;
 
+            if (!Enum.TryParse<DeviceType>(body.DeviceType ?? "ZkTeco", true, out var deviceType))
+                deviceType = DeviceType.ZkTeco;
+
             var device = new Device
             {
                 DeviceName = body.DeviceName.Trim(),
+                DeviceType = deviceType,
                 DeviceIP = body.DeviceIP.Trim(),
                 DevicePort = body.DevicePort > 0 ? body.DevicePort : 4370,
                 CommPassword = body.CommPassword,
@@ -181,6 +187,7 @@ namespace ZKAttendance.Api.Controllers
                 device.SerialNumber,
                 device.DeviceModel,
                 role = device.Role.ToString(),
+                deviceType = device.DeviceType.ToString(),
                 device.IsActive,
                 device.IsOnline,
                 message = "Device added successfully."
@@ -212,6 +219,8 @@ namespace ZKAttendance.Api.Controllers
             if (body.IsActive.HasValue) device.IsActive = body.IsActive.Value;
             if (!string.IsNullOrWhiteSpace(body.Role) && Enum.TryParse<DeviceRole>(body.Role, true, out var role))
                 device.Role = role;
+            if (!string.IsNullOrWhiteSpace(body.DeviceType) && Enum.TryParse<DeviceType>(body.DeviceType, true, out var dt))
+                device.DeviceType = dt;
 
             await _db.SaveChangesAsync(ct);
 
@@ -225,6 +234,7 @@ namespace ZKAttendance.Api.Controllers
                 device.SerialNumber,
                 device.DeviceModel,
                 role = device.Role.ToString(),
+                deviceType = device.DeviceType.ToString(),
                 device.IsActive,
                 device.IsOnline,
                 message = "Device updated successfully."
@@ -454,6 +464,7 @@ namespace ZKAttendance.Api.Controllers
         string? SerialNumber = null,
         string? DeviceModel = null,
         string? Role = "Slave",
+        string DeviceType = "ZkTeco",
         bool? IsActive = true);
 
     public record AgentUpdateDeviceRequest(
@@ -466,5 +477,6 @@ namespace ZKAttendance.Api.Controllers
         string? SerialNumber = null,
         string? DeviceModel = null,
         string? Role = null,
+        string? DeviceType = null,
         bool? IsActive = null);
 }

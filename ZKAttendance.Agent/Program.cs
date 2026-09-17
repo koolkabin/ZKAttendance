@@ -46,22 +46,24 @@ builder.Services.AddHttpClient(CentralClient.HttpClientName, client =>
 builder.Services.AddScoped<ICentralClient, CentralClient>();
 builder.Services.AddScoped<IDeviceSyncService, DeviceSyncService>();
 
-// ── talking to the devices ─────────────────────────────────────
+// ── talking to the devices ─────────────────────────────────
 //
-// Reuses App1's reader rather than a second copy of the ZKTeco protocol.
-// "Fake" lets the agent be demonstrated with no hardware present.
-builder.Services.AddTransient<Func<IZkDeviceReader>>(sp => () =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
-    var protocol = config["DeviceProtocol"] ?? "Tcp";
-
-    if (string.Equals(protocol, "Fake", StringComparison.OrdinalIgnoreCase))
-        return new FakeDeviceReader(sp.GetRequiredService<ILogger<FakeDeviceReader>>());
-
-    return new ZkTcpDeviceReader(
+// Each vendor reader is a transient. DeviceReaderFactory resolves the right
+// one based on the DeviceType that the central server returns per device row.
+// Adding a new vendor: register it here and add a case to DeviceReaderFactory.
+var deviceTimeoutMs = builder.Configuration.GetValue("DeviceTimeoutMs", 5000);
+builder.Services.AddTransient<ZkTcpDeviceReader>(sp =>
+    new ZkTcpDeviceReader(
         sp.GetRequiredService<ILogger<ZkTcpDeviceReader>>(),
-        config.GetValue("DeviceTimeoutMs", 5000));
-});
+        builder.Configuration.GetValue("DeviceTimeoutMs", 5000)));
+builder.Services.AddTransient<FakeDeviceReader>();
+builder.Services.AddTransient<HikvisionDeviceReader>();
+builder.Services.AddTransient<DahuaDeviceReader>();
+builder.Services.AddTransient<AnvizDeviceReader>();
+builder.Services.AddTransient<eSSLDeviceReader>();
+builder.Services.AddTransient<HttpPushDeviceReader>();
+
+builder.Services.AddSingleton<IDeviceReaderFactory, DeviceReaderFactory>();
 
 // ── background workers ─────────────────────────────────────────
 //

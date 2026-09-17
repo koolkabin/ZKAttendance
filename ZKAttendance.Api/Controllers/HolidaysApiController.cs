@@ -46,8 +46,8 @@ namespace ZKAttendance.Api.Controllers
         }
 
         /// <summary>
-        /// Mark a day as a holiday (name, type and an optional note). If one
-        /// already exists on that date its details are updated instead.
+        /// Mark a day or date range as holiday(s) (e.g. for multi-day festivals like Dashain or Tihar).
+        /// If a holiday already exists on a date in the range, its details are updated.
         /// </summary>
         [HttpPost]
         [ProducesResponseType(200)]
@@ -58,36 +58,60 @@ namespace ZKAttendance.Api.Controllers
             if (string.IsNullOrWhiteSpace(request.HolidayName))
                 return BadRequest(ApiError.From("A name is required."));
 
-            var date = request.Date.Date;
+            var startDate = (request.FromDate ?? request.Date).Date;
+            var endDate = (request.ToDate ?? startDate).Date;
+
+            if (endDate < startDate)
+                return BadRequest(ApiError.From("To Date cannot be earlier than From Date."));
+
+            var totalDays = (int)(endDate - startDate).TotalDays + 1;
+            if (totalDays > 60)
+                return BadRequest(ApiError.From("Holiday range cannot exceed 60 days."));
+
             var type = string.IsNullOrWhiteSpace(request.HolidayType) ? "Public" : request.HolidayType!.Trim();
             var note = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description!.Trim();
 
-            var existing = await _db.Holidays.FirstOrDefaultAsync(h => h.IsActive && h.HolidayDate == date);
-            if (existing is not null)
+            var existingInRange = await _db.Holidays
+                .Where(h => h.IsActive && h.HolidayDate >= startDate && h.HolidayDate <= endDate)
+                .ToDictionaryAsync(h => h.HolidayDate.Date);
+
+            var resultList = new List<object>();
+
+            for (var cur = startDate; cur <= endDate; cur = cur.AddDays(1))
             {
-                existing.HolidayName = request.HolidayName.Trim();
-                existing.HolidayType = type;
-                existing.Description = note;
-                existing.ModifiedDate = DateTime.Now;
-                await _db.SaveChangesAsync();
-                return Ok(new { existing.HolidayId, existing.HolidayName, date = existing.HolidayDate, existing.HolidayType, existing.Description });
+                if (existingInRange.TryGetValue(cur, out var existing))
+                {
+                    existing.HolidayName = request.HolidayName.Trim();
+                    existing.HolidayType = type;
+                    existing.Description = note;
+                    existing.DurationDays = totalDays;
+                    existing.ModifiedDate = DateTime.Now;
+                    resultList.Add(new { existing.HolidayId, existing.HolidayName, date = existing.HolidayDate, existing.HolidayType, existing.Description });
+                }
+                else
+                {
+                    var holiday = new Holiday
+                    {
+                        HolidayName = request.HolidayName.Trim(),
+                        HolidayDate = cur,
+                        Description = note,
+                        HolidayType = type,
+                        DurationDays = totalDays,
+                        IsActive = true,
+                        CreatedDate = DateTime.Now
+                    };
+                    _db.Holidays.Add(holiday);
+                    resultList.Add(new { holiday.HolidayId, holiday.HolidayName, date = holiday.HolidayDate, holiday.HolidayType, holiday.Description });
+                }
             }
 
-            var holiday = new Holiday
-            {
-                HolidayName = request.HolidayName.Trim(),
-                HolidayDate = date,
-                Description = note,
-                HolidayType = type,
-                DurationDays = 1,
-                IsActive = true,
-                CreatedDate = DateTime.Now
-            };
-            _db.Holidays.Add(holiday);
             await _db.SaveChangesAsync();
 
-            _logger.LogInformation("Holiday '{Name}' ({Type}) added on {Date} by {User}", holiday.HolidayName, type, date, User.Identity?.Name);
-            return StatusCode(201, new { holiday.HolidayId, holiday.HolidayName, date = holiday.HolidayDate, holiday.HolidayType, holiday.Description });
+            _logger.LogInformation(
+                "Holiday '{Name}' ({Type}) added/updated for range {Start:yyyy-MM-dd} to {End:yyyy-MM-dd} ({Count} days) by {User}",
+                request.HolidayName.Trim(), type, startDate, endDate, totalDays, User.Identity?.Name);
+
+            return StatusCode(201, resultList.Count == 1 ? resultList[0] : new { count = totalDays, holidays = resultList });
         }
 
         /// <summary>Remove a holiday (unmark the day).</summary>
@@ -118,6 +142,8 @@ namespace ZKAttendance.Api.Controllers
     {
         public string HolidayName { get; set; } = string.Empty;
         public DateTime Date { get; set; }
+        public DateTime? FromDate { get; set; }
+        public DateTime? ToDate { get; set; }
         public string? HolidayType { get; set; }
         public string? Description { get; set; }
     }

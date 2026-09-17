@@ -9,30 +9,31 @@ import { useCalendar } from '../context/CalendarContext'
 import DateToggle from '../components/DateToggle'
 import NepaliDatePicker from '../components/NepaliDatePicker'
 import NepaliMonthCalendar from '../components/NepaliMonthCalendar'
+import { HiOutlineCalendarDays, HiOutlineCalendarDateRange } from 'react-icons/hi2'
 
 const TYPES = ['Festival', 'Religious', 'National', 'Public', 'Bandh / strike', 'Company', 'Other']
 
-const emptyForm = { date: '', holidayName: '', holidayType: 'Festival', description: '' }
+const emptyForm = { date: '', toDate: '', holidayName: '', holidayType: 'Festival', description: '', isRange: false }
 
 /**
  * Holidays, laid out as calendar on the left and entry form on the right.
- *
- * The old screen only let a holiday be added by clicking a day, which meant
- * paging to the right month first and gave nowhere to type a date directly.
- * Now both work: click a day to load it into the form, or pick the date in the
- * form itself. The form scrolls independently and sticks, so a long festival
- * list on the left never pushes the Save button off screen.
+ * Supports single day marking or date ranges for multi-day festivals like Dashain and Tihar.
  */
 export default function Holidays() {
   const fb = useFeedback()
   const { isBs, formatDate } = useCalendar()
   const today = useMemo(() => todayIso(), [])
 
-  const [view, setView] = useState(() => {
+  function getCurrentView(isBsMode) {
     const d = new Date()
-    const bs = adToBs(d)
-    return isBs ? { year: bs.year, month: bs.month } : { year: d.getFullYear(), month: d.getMonth() + 1 }
-  })
+    if (isBsMode) {
+      const bs = adToBs(d)
+      return { year: bs?.year || 2083, month: bs?.month || 5 }
+    }
+    return { year: d.getFullYear(), month: d.getMonth() + 1 }
+  }
+
+  const [view, setView] = useState(() => getCurrentView(isBs))
 
   const [holidays, setHolidays] = useState([])
   const [error, setError] = useState('')
@@ -41,40 +42,17 @@ export default function Holidays() {
   const [saving, setSaving] = useState(false)
 
   function goToToday() {
-    const d = new Date()
-    const bs = adToBs(d)
-    setView(isBs ? { year: bs.year, month: bs.month } : { year: d.getFullYear(), month: d.getMonth() + 1 })
+    setView(getCurrentView(isBs))
     selectDay(today)
   }
 
-  // Re-base the month only when the user actually TOGGLES AD/BS.
-  //
-  // This effect converts the view from the old system into the new one. On the
-  // first render no toggle happened, so running it treated a date that was
-  // already correct as if it were in the other calendar. That pushed the year
-  // to 2140 BS and rendered a nonsense AD year, which is why every calendar
-  // opened on the wrong decade.
-  const didMount = useRef(false)
-
+  // Ensure view syncs with current date whenever calendar mode (BS/AD) toggles
   useEffect(() => {
-    if (!didMount.current) {
-      didMount.current = true
-      return
-    }
-
-    setView((v) => {
-      const grid = buildMonthGrid(isBs ? 'AD' : 'BS', v.year, v.month)
-      const anchor = grid.cells.find(Boolean)
-      if (!anchor) return v
-      return isBs
-        ? { year: anchor.bsYear, month: anchor.bsMonth }
-        : { year: anchor.adYear, month: anchor.adMonth }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setView(getCurrentView(isBs))
+    selectDay(today)
   }, [isBs])
 
-  // The AD span the visible month covers — a BS month straddles two AD months,
-  // so the range has to come from the grid rather than from month arithmetic.
+  // The AD span the visible month covers
   const span = useMemo(() => {
     const grid = buildMonthGrid(isBs ? 'BS' : 'AD', view.year, view.month)
     const real = grid.cells.filter(Boolean)
@@ -98,9 +76,18 @@ export default function Holidays() {
     return map
   }, [holidays])
 
+  // Calculate range days count
+  const rangeDuration = useMemo(() => {
+    if (!form.isRange || !form.date || !form.toDate) return 1
+    const d1 = new Date(form.date)
+    const d2 = new Date(form.toDate)
+    const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1
+    return diff > 0 ? diff : 1
+  }, [form.isRange, form.date, form.toDate])
+
   // Sync form when holidays load or if date matches an existing holiday
   useEffect(() => {
-    if (!form.date) return
+    if (!form.date || form.isRange) return
     const existing = holidayByDate[form.date]
     if (existing && !editingExisting) {
       setEditingExisting(true)
@@ -111,7 +98,7 @@ export default function Holidays() {
         description: existing.description || '',
       }))
     }
-  }, [holidayByDate, form.date, editingExisting])
+  }, [holidayByDate, form.date, form.isRange, editingExisting])
 
   function selectDay(iso) {
     const existing = holidayByDate[iso]
@@ -119,12 +106,15 @@ export default function Holidays() {
     setForm(
       existing
         ? {
+            ...emptyForm,
             date: iso,
+            toDate: '',
+            isRange: false,
             holidayName: existing.holidayName,
             holidayType: existing.holidayType || 'Festival',
             description: existing.description || '',
           }
-        : { ...emptyForm, date: iso },
+        : { ...emptyForm, date: iso, toDate: '', isRange: false },
     )
   }
 
@@ -134,16 +124,27 @@ export default function Holidays() {
       fb.error('Pick a date first.')
       return
     }
+    if (form.isRange && form.toDate && form.toDate < form.date) {
+      fb.error('To Date cannot be earlier than From Date.')
+      return
+    }
     setSaving(true)
     try {
       await api.create({
         date: form.date,
+        toDate: form.isRange && form.toDate ? form.toDate : undefined,
         holidayName: form.holidayName.trim(),
         holidayType: form.holidayType,
         description: form.description.trim() || null,
       })
-      fb.success(editingExisting ? 'Holiday updated' : 'Holiday added')
-      setForm(emptyForm)
+      fb.success(
+        editingExisting
+          ? 'Holiday updated'
+          : form.isRange && form.toDate
+          ? `Holidays added for ${rangeDuration} days`
+          : 'Holiday added',
+      )
+      setForm({ ...emptyForm, date: todayIso() })
       setEditingExisting(false)
       load()
     } catch (err) {
@@ -174,18 +175,13 @@ export default function Holidays() {
   }
 
   return (
-    <div>
-      <PageHeader
-        title="Holidays"
-        subtitle="Click a day or pick a date to mark a holiday"
-        actions={<DateToggle />}
-      />
+    <div className="space-y-3">
+      <PageHeader title="Holidays" actions={<DateToggle />} />
       {error && <ErrorText>{error}</ErrorText>}
 
-      {/* Half calendar, half entry — each scrolls on its own so a long
-          festival list never pushes Save out of reach. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* ── Left: the month ─────────────────────────────────────── */}
+      {/* Grid container: Calendar on left, Entry on right */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 items-start">
+        {/* ── Left: Calendar & compact list ────────────────────────── */}
         <div>
           <NepaliMonthCalendar
             view={view}
@@ -193,7 +189,7 @@ export default function Holidays() {
             selectedIso={form.date || today}
             onDayClick={(cell) => {
               if (cell.isSaturday) {
-                fb.info('Saturday is already the fixed weekly off — no holiday needed.')
+                fb.info('Saturday is already the weekly off.')
                 return
               }
               selectDay(cell.adIso)
@@ -214,7 +210,7 @@ export default function Holidays() {
                   dayClass: 'text-violet-700',
                   title: `${h.holidayName}${h.holidayType ? ` (${h.holidayType})` : ''}`,
                   bottom: (
-                    <span className="text-[9px] font-medium leading-tight text-violet-700">
+                    <span className="text-[9px] font-medium leading-tight text-violet-700 truncate block">
                       {h.holidayName}
                     </span>
                   ),
@@ -231,146 +227,206 @@ export default function Holidays() {
                 <button
                   type="button"
                   onClick={goToToday}
-                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-sky-700 shadow-sm hover:bg-sky-50 transition cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-sky-700 shadow-xs hover:bg-sky-50 transition cursor-pointer"
                 >
-                  Jump to Today
+                  Today
                 </button>
               </div>
             }
           />
 
-          {/* This month's list, scrollable */}
-          <Card className="mt-4">
-            <div className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-700">
-              Holidays this month
-              <span className="ml-2 text-xs font-normal text-slate-400">({holidays.length})</span>
+          {/* Compact monthly list underneath */}
+          <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 text-xs font-bold text-slate-700">
+              <span>Holidays this month</span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.2 text-[11px] font-semibold text-slate-600">
+                {holidays.length}
+              </span>
             </div>
-            <div className="max-h-64 overflow-y-auto overscroll-contain">
+            <div className="max-h-32 overflow-y-auto divide-y divide-slate-100 mt-1">
               {holidays.length === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-slate-400">
-                  Nothing marked in this month.
+                <p className="py-2.5 text-center text-xs text-slate-400">
+                  No holidays marked this month.
                 </p>
               ) : (
-                <ul className="divide-y divide-slate-50">
-                  {holidays.map((h) => {
-                    const iso = ymd(h.date)
-                    const bs = adToBs(h.date)
-                    return (
-                      <li key={h.holidayId} className="flex items-start justify-between gap-3 px-4 py-2.5">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-slate-900">{h.holidayName}</span>
-                            {h.holidayType && <Badge tone="sky">{h.holidayType}</Badge>}
-                          </div>
-                          <div className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                            {isBs
-                              ? `${bsDmy(bs?.dateBs)} BS · ${dmy(h.date)} AD`
-                              : `${dmy(h.date)} AD · ${bsDmy(bs?.dateBs)} BS`}
-                          </div>
-                          {h.description && (
-                            <div className="mt-0.5 text-xs text-slate-400">{h.description}</div>
-                          )}
+                holidays.map((h) => {
+                  const iso = ymd(h.date)
+                  const bs = adToBs(h.date)
+                  return (
+                    <div key={h.holidayId} className="flex items-center justify-between py-1.5 text-xs">
+                      <div className="min-w-0 pr-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-800 truncate">{h.holidayName}</span>
+                          {h.holidayType && <Badge tone="sky">{h.holidayType}</Badge>}
                         </div>
-                        <div className="flex shrink-0 gap-3 text-xs">
-                          <button onClick={() => selectDay(iso)} className="text-sky-600 hover:underline">
-                            edit
-                          </button>
-                          <button onClick={() => remove(iso)} className="text-red-600 hover:underline">
-                            remove
-                          </button>
+                        <div className="text-[11px] text-slate-400 tabular-nums">
+                          {isBs ? `${bsDmy(bs?.dateBs)} BS · ${dmy(h.date)} AD` : `${dmy(h.date)} AD · ${bsDmy(bs?.dateBs)} BS`}
                         </div>
-                      </li>
-                    )
-                  })}
-                </ul>
+                      </div>
+                      <div className="flex shrink-0 gap-2 text-xs">
+                        <button onClick={() => selectDay(iso)} className="text-sky-600 hover:underline">edit</button>
+                        <button onClick={() => remove(iso)} className="text-rose-600 hover:underline">remove</button>
+                      </div>
+                    </div>
+                  )
+                })
               )}
             </div>
-          </Card>
+          </div>
         </div>
 
-        {/* ── Right: add / edit ───────────────────────────────────── */}
-        <div className="lg:sticky lg:top-6 lg:self-start">
-          <Card className="p-4 sm:p-5">
-            <h2 className="text-base font-semibold text-slate-900">
-              {editingExisting ? 'Edit holiday' : 'Add a holiday'}
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              {editingExisting
-                ? 'This will overwrite the existing entry.'
-                : 'Past and future dates are both allowed.'}
-            </p>
+        {/* ── Right: Entry Form ────────────────────────────────────── */}
+        <div>
+          <Card className="p-4 sm:p-4.5 shadow-sm">
+            {/* Prominent High-Contrast Mode Switcher */}
+            {!editingExisting && (
+              <div className="grid grid-cols-2 gap-2 mb-3.5 p-1 rounded-xl bg-slate-100/90 border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, isRange: false, toDate: '' }))}
+                  className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
+                    !form.isRange
+                      ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-md ring-2 ring-sky-300'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  }`}
+                >
+                  <HiOutlineCalendarDays className="h-4 w-4 shrink-0" />
+                  <span>Single Day</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, isRange: true, toDate: p.toDate || p.date }))}
+                  className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
+                    form.isRange
+                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  }`}
+                >
+                  <HiOutlineCalendarDateRange className="h-4 w-4 shrink-0" />
+                  <span>Multiple Days (Range)</span>
+                </button>
+              </div>
+            )}
 
-            <form onSubmit={save} className="mt-4 space-y-4">
-              <Field
-                label={
-                  <span className="flex items-center justify-between">
-                    <span>Date ({isBs ? 'BS' : 'AD'})</span>
-                    {form.date !== today && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          goToToday()
-                        }}
-                        className="text-xs font-semibold text-sky-600 hover:text-sky-700 hover:underline cursor-pointer"
-                      >
-                        Set to Today
-                      </button>
-                    )}
-                  </span>
-                }
-                required
-              >
-                <NepaliDatePicker
-                  value={form.date}
-                  onChange={(date) => selectDay(date || today)}
-                  disableFuture={false}
-                  clearable
-                  placeholder="Choose a date"
-                />
-              </Field>
+            {editingExisting && (
+              <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-100">
+                <h2 className="text-sm font-bold text-slate-800">Edit Holiday</h2>
+                <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                  Editing Mode
+                </span>
+              </div>
+            )}
 
-              {form.date && (
-                <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
-                  <div className="tabular-nums">
-                    {isBs
-                      ? `${bsDmy(adToBs(form.date)?.dateBs)} BS · ${dmy(form.date)} AD`
-                      : `${dmy(form.date)} AD · ${bsDmy(adToBs(form.date)?.dateBs)} BS`}
-                    {form.date < today && <span className="ml-2 text-slate-400">(past date)</span>}
-                    {form.date > today && <span className="ml-2 text-sky-600">(upcoming)</span>}
-                  </div>
+            <form onSubmit={save} className="space-y-3">
+              {/* Date pickers */}
+              {!form.isRange ? (
+                <Field
+                  label={
+                    <span className="flex items-center justify-between">
+                      <span>Date ({isBs ? 'BS' : 'AD'})</span>
+                      {form.date !== today && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            goToToday()
+                          }}
+                          className="text-xs font-semibold text-sky-600 hover:text-sky-700 hover:underline cursor-pointer"
+                        >
+                          Today
+                        </button>
+                      )}
+                    </span>
+                  }
+                  required
+                >
+                  <NepaliDatePicker
+                    value={form.date}
+                    onChange={(date) => selectDay(date || today)}
+                    disableFuture={false}
+                    clearable
+                    placeholder="Choose a date"
+                  />
+                </Field>
+              ) : (
+                <div className="grid grid-cols-2 gap-2.5">
+                  <Field label={`From Date (${isBs ? 'BS' : 'AD'})`} required>
+                    <NepaliDatePicker
+                      value={form.date}
+                      onChange={(date) => setForm((p) => ({ ...p, date: date || today }))}
+                      disableFuture={false}
+                      clearable
+                      placeholder="Start date"
+                    />
+                  </Field>
+                  <Field label={`To Date (${isBs ? 'BS' : 'AD'})`} required>
+                    <NepaliDatePicker
+                      value={form.toDate || form.date}
+                      onChange={(date) => setForm((p) => ({ ...p, toDate: date || form.date }))}
+                      disableFuture={false}
+                      clearable
+                      placeholder="End date"
+                    />
+                  </Field>
                 </div>
               )}
 
-              <Field label="Name" required hint="e.g. Dashain, Tihar, Teej">
+              {/* Compact date info banner */}
+              {form.date && (
+                <div className="flex items-center justify-between rounded-lg bg-sky-50/70 border border-sky-100 px-3 py-1.5 text-xs text-sky-950 font-medium">
+                  <span className="tabular-nums">
+                    {isBs
+                      ? `${bsDmy(adToBs(form.date)?.dateBs)} BS`
+                      : `${dmy(form.date)} AD`}
+                    {form.isRange && form.toDate && form.toDate !== form.date && (
+                      <>
+                        {' → '}
+                        {isBs
+                          ? `${bsDmy(adToBs(form.toDate)?.dateBs)} BS`
+                          : `${dmy(form.toDate)} AD`}
+                      </>
+                    )}
+                  </span>
+                  {form.isRange && form.toDate && (
+                    <span className="rounded-full bg-purple-600 px-2 py-0.5 text-[10px] font-bold text-white shadow-xs">
+                      {rangeDuration} {rangeDuration === 1 ? 'day' : 'days'}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <Field label="Holiday Name" required>
                 <Input
                   value={form.holidayName}
                   onChange={(e) => setForm({ ...form, holidayName: e.target.value })}
                   required
-                  placeholder="Holiday name"
+                  placeholder="e.g. Dashain Vacation"
                 />
               </Field>
 
-              <Field label="Type">
-                <Select
-                  value={form.holidayType}
-                  onChange={(e) => setForm({ ...form, holidayType: e.target.value })}
-                >
-                  {TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              {/* Type and Note side-by-side to save vertical space */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <Field label="Category">
+                  <Select
+                    value={form.holidayType}
+                    onChange={(e) => setForm({ ...form, holidayType: e.target.value })}
+                  >
+                    {TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
 
-              <Field label="Note" hint="Optional">
-                <Input
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  placeholder="e.g. Women's festival, government holiday"
-                />
-              </Field>
+                <Field label="Note">
+                  <Input
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                    placeholder="Optional note"
+                  />
+                </Field>
+              </div>
 
               <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
                 <span>
@@ -388,10 +444,16 @@ export default function Holidays() {
                       selectDay(today)
                     }}
                   >
-                    Reset to Today
+                    Reset
                   </Button>
                   <Button type="submit" disabled={saving || !form.date}>
-                    {saving ? 'Saving…' : editingExisting ? 'Update' : 'Add holiday'}
+                    {saving
+                      ? 'Saving…'
+                      : editingExisting
+                      ? 'Update'
+                      : form.isRange
+                      ? `Add ${rangeDuration} Days`
+                      : 'Add Holiday'}
                   </Button>
                 </span>
               </div>
@@ -402,3 +464,4 @@ export default function Holidays() {
     </div>
   )
 }
+

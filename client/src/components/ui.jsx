@@ -178,3 +178,29 @@ export function Table({ columns, rows, empty = 'Nothing here yet.', loading }) {
     </Card>
   )
 }
+
+export function Toggle({ label, checked, onChange, hint }) {
+  return (
+    <label className="flex items-start gap-3 cursor-pointer select-none">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange?.(!checked)}
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 ${
+          checked ? 'bg-sky-600' : 'bg-slate-300'
+        }`}
+      >
+        <span
+          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition duration-200 ease-in-out ${
+            checked ? 'translate-x-4.5' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+      <div className="flex flex-col">
+        {label && <span className="text-sm font-medium text-slate-700">{label}</span>}
+        {hint && <span className="text-xs text-slate-500">{hint}</span>}
+      </div>
+    </label>
+  )
+}

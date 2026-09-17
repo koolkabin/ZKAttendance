@@ -55,6 +55,7 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
             // Driving off attendance records instead would silently drop them.
             var employeeQuery = _db.Employees
                 .Include(e => e.Department)
+                .Include(e => e.DefaultShift)
                 .Where(e => e.IsActive && e.ApprovalStatus == "Approved");
 
             if (departmentId.HasValue)
@@ -198,19 +199,34 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
                 return row;
             }
 
+            var effectivePolicy = policy;
+            if (e.DefaultShift != null)
+            {
+                effectivePolicy = new AttendancePolicy
+                {
+                    OfficeStartTime = e.DefaultShift.StartTime,
+                    OfficeEndTime = e.DefaultShift.EndTime,
+                    GraceMinutes = e.DefaultShift.LateMinutes,
+                    ApprovalRequiredAfterMinutes = policy.ApprovalRequiredAfterMinutes,
+                    RequireApprovalForLate = policy.RequireApprovalForLate,
+                    CloseGraceMinutes = e.DefaultShift.EarlyMinutes > 0 ? e.DefaultShift.EarlyMinutes : policy.CloseGraceMinutes,
+                    HalfDayUnderHours = e.DefaultShift.MinHoursForFullDay > 0 ? e.DefaultShift.MinHoursForFullDay : policy.HalfDayUnderHours
+                };
+            }
+
             if (times.Count == 1)
             {
                 // Scanned once. Almost always a forgotten check-out, so it is
                 // Partial rather than Present: it needs a human to look at it.
                 row.Status = DailyAttendanceStatus.Partial;
-                row.MinutesLate = policy.MinutesLate(row.CheckIn!.Value.TimeOfDay);
+                row.MinutesLate = effectivePolicy.MinutesLate(row.CheckIn!.Value.TimeOfDay);
                 return row;
             }
 
             row.WorkedHours = Math.Round((row.CheckOut!.Value - row.CheckIn!.Value).TotalHours, 2);
-            row.MinutesLate = policy.MinutesLate(row.CheckIn.Value.TimeOfDay);
+            row.MinutesLate = effectivePolicy.MinutesLate(row.CheckIn.Value.TimeOfDay);
 
-            var outcome = policy.Classify(row.CheckIn.Value.TimeOfDay);
+            var outcome = effectivePolicy.Classify(row.CheckIn.Value.TimeOfDay);
             row.Status = outcome == ArrivalOutcome.OnTime
                 ? DailyAttendanceStatus.Present
                 : DailyAttendanceStatus.Late;
@@ -240,6 +256,7 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
 
             var employeeQuery = _db.Employees
                 .Include(e => e.Department)
+                .Include(e => e.DefaultShift)
                 .Where(e => e.IsActive && e.ApprovalStatus == "Approved");
             if (departmentId.HasValue)
                 employeeQuery = employeeQuery.Where(e => e.DepartmentId == departmentId.Value);
@@ -306,6 +323,22 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
                     DeviceUserId = e.BiometricUserId
                 };
 
+                var empPolicy = policy;
+                if (e.DefaultShift != null)
+                {
+                    empPolicy = new AttendancePolicy
+                    {
+                        OfficeStartTime = e.DefaultShift.StartTime,
+                        OfficeEndTime = e.DefaultShift.EndTime,
+                        GraceMinutes = e.DefaultShift.LateMinutes,
+                        ApprovalRequiredAfterMinutes = policy.ApprovalRequiredAfterMinutes,
+                        RequireApprovalForLate = policy.RequireApprovalForLate,
+                        CloseGraceMinutes = e.DefaultShift.EarlyMinutes > 0 ? e.DefaultShift.EarlyMinutes : policy.CloseGraceMinutes,
+                        HalfDayUnderHours = e.DefaultShift.MinHoursForFullDay > 0 ? e.DefaultShift.MinHoursForFullDay : policy.HalfDayUnderHours
+                    };
+                }
+                var empCloseMoment = empPolicy.DayClosesAt;
+
                 for (var d = start; d <= end; d = d.AddDays(1))
                 {
                     var key = d.ToString("yyyy-MM-dd");
@@ -324,7 +357,7 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
                         if (nonWorking) { row.Marks[key] = "H"; continue; }
 
                         // A day that has not finished is not an absence.
-                        var closed = d < today || (d == today && now.TimeOfDay >= closeMoment);
+                        var closed = d < today || (d == today && now.TimeOfDay >= empCloseMoment);
                         if (!closed) { row.Marks[key] = ""; continue; }
 
                         row.Marks[key] = "A";
@@ -342,7 +375,7 @@ namespace ZKAttendance.Infrastructure.Services.Attendance
                     var hours = (times.Last() - times.First()).TotalHours;
                     if (hours > 0) row.TotalHours += hours;
 
-                    if (policy.Classify(times.First().TimeOfDay) == ArrivalOutcome.OnTime)
+                    if (empPolicy.Classify(times.First().TimeOfDay) == ArrivalOutcome.OnTime)
                     {
                         row.Marks[key] = "P";
                         row.TotalPresent++;

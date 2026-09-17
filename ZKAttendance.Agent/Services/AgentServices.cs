@@ -10,7 +10,9 @@ namespace ZKAttendance.Agent.Services
     public record CentralDevice(
         int DeviceId, string DeviceName, string DeviceIP, int DevicePort,
         int CommPassword, string? SerialNumber, string? DeviceModel,
-        string? Role, bool IsOnline, DateTime? LastConnectionTime, bool IsActive = true);
+        string? Role, bool IsOnline, DateTime? LastConnectionTime,
+        bool IsActive = true,
+        string DeviceType = "ZkTeco");
 
     public record DeviceListResponse(int LocalServerId, int DeviceCount, List<CentralDevice> Devices);
 
@@ -28,6 +30,7 @@ namespace ZKAttendance.Agent.Services
         string? SerialNumber = null,
         string? DeviceModel = null,
         string? Role = "Slave",
+        string DeviceType = "ZkTeco",
         bool? IsActive = true);
 
     public record UpdateDeviceRequest(
@@ -38,6 +41,7 @@ namespace ZKAttendance.Agent.Services
         string? SerialNumber = null,
         string? DeviceModel = null,
         string? Role = null,
+        string? DeviceType = null,
         bool? IsActive = null);
 
     public record DeviceTestResult(
@@ -213,6 +217,7 @@ namespace ZKAttendance.Agent.Services
                 agentKey = AgentKey,
                 secret = Secret,
                 deviceName = request.DeviceName,
+                deviceType = request.DeviceType,
                 deviceIP = request.DeviceIP,
                 devicePort = request.DevicePort,
                 commPassword = request.CommPassword,
@@ -256,6 +261,7 @@ namespace ZKAttendance.Agent.Services
                 agentKey = AgentKey,
                 secret = Secret,
                 deviceName = request.DeviceName,
+                deviceType = request.DeviceType,
                 deviceIP = request.DeviceIP,
                 devicePort = request.DevicePort,
                 commPassword = request.CommPassword,
@@ -342,14 +348,14 @@ namespace ZKAttendance.Agent.Services
 
         private readonly AgentDbContext _db;
         private readonly ICentralClient _central;
-        private readonly Func<IZkDeviceReader> _readerFactory;
+        private readonly IDeviceReaderFactory _readerFactory;
         private readonly IConfiguration _config;
         private readonly ILogger<DeviceSyncService> _logger;
 
         public DeviceSyncService(
             AgentDbContext db,
             ICentralClient central,
-            Func<IZkDeviceReader> readerFactory,
+            IDeviceReaderFactory readerFactory,
             IConfiguration config,
             ILogger<DeviceSyncService> logger)
         {
@@ -373,7 +379,9 @@ namespace ZKAttendance.Agent.Services
                 return new DeviceTestResult(false, $"Device '{device.DeviceName}' is currently busy with another sync operation. Please retry in a moment.");
             }
 
-            using var reader = _readerFactory();
+            using var reader = _readerFactory.Create(
+                Enum.TryParse<ZKAttendance.Domain.Enums.DeviceType>(device.DeviceType, ignoreCase: true, out var dt)
+                    ? dt : ZKAttendance.Domain.Enums.DeviceType.ZkTeco);
             try
             {
                 if (!await reader.ConnectAsync(device.DeviceIP, device.DevicePort, device.CommPassword))
@@ -449,7 +457,9 @@ namespace ZKAttendance.Agent.Services
                 return run;
             }
 
-            using var reader = _readerFactory();
+            using var reader = _readerFactory.Create(
+                Enum.TryParse<ZKAttendance.Domain.Enums.DeviceType>(device.DeviceType, ignoreCase: true, out var dt2)
+                    ? dt2 : ZKAttendance.Domain.Enums.DeviceType.ZkTeco);
 
             try
             {
